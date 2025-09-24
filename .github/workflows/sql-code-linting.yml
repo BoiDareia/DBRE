@@ -1,0 +1,133 @@
+# A descriptive name for the GitHub Actions workflow.
+name: Create DB Project Ticket on PR Merge and Lint SQL Files
+
+# Allows the workflow to be triggered manually from the Actions tab in GitHub.
+on:
+  workflow_dispatch
+  # Allows the workflow to be triggered manually from the Actions tab in GitHub.
+  ##workflow_dispatch
+  # The 'pull_request' trigger is currently commented out.
+  # If enabled, it would run the workflow automatically when a pull request is
+  # opened, edited, reopened, or has new commits pushed.
+  ##pull_request:
+  ##  types: [opened, edited, reopened, review_requested, synchronize]
+
+# A container for all the jobs that run in the workflow.
+jobs:
+  # The first job in the workflow, responsible for linting and ticket creation.
+  lint-sql-files:
+    # Specifies that this job will run on the latest version of an Ubuntu Linux runner.
+    runs-on: ubuntu-latest
+    # Defines the outputs of this job, which can be used by other dependent jobs.
+    outputs:
+      # 'output1' will hold the result of the Jira action (e.g., 'created').
+      output1: ${{ steps.ticket_creation.outputs.jira_action }}
+      # 'output2' will hold the URL of the created Jira ticket.
+      output2: ${{ steps.ticket_creation.outputs.jira_ticket_link }}
+    # A container for the sequence of steps executed in this job.
+    steps:
+      # Step 1: Check out the repository's code.
+      - name: Setup and checkout repo
+        id: repoCheckout
+        uses: actions/checkout@v4
+        with:
+          # Fetches the last 2 commits, which is necessary for diffing changes.
+          fetch-depth: 2
+          # Checks out the head of the pull request's branch.
+          ref: ${{ github.head_ref }}
+
+      # Step 2: Set up the Python environment.
+      - name: Setup Python
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # Step 3: Install the sqlfluff package using pip.
+      - name: Install sqlfluff
+        id: install_sqlfluff
+        run: "pip install sqlfluff"
+
+      # Step 4: Use a specialized action to identify which SQL files have changed in the PR.
+      - name: Get changed SQL files
+        id: changed-sql-files
+        uses: tj-actions/changed-files@v46
+        with:
+          # Specifies the pattern for files to check for changes.
+          files: |
+            **.sql
+
+      # Step 5: A conditional step to log the changed files if any were found.
+      - name: Run step if any file(s) in the SQL folder change
+        # This step only runs if the previous step's output 'any_changed' is true.
+        if: steps.changed-sql-files.outputs.any_changed == 'true'
+        env:
+          # Makes the list of changed files available as an environment variable.
+          ALL_CHANGED_FILES: ${{ steps.changed-sql-files.outputs.all_changed_files }}
+        run: |
+          echo "One or more files in the SQL folder has changed."
+          echo "List all the files that have changed: $ALL_CHANGED_FILES"
+
+      # Step 6: Run the sqlfluff linter on the changed files.
+      - name: Lint sql files
+        id: sqlfluff_json
+        # This step also only runs if SQL files have changed.
+        if: steps.changed-sql-files.outputs.any_changed == 'true'
+        shell: bash -l {0}
+        # The lint command uses a specific config, formats output for GitHub annotations,
+        # and redirects the JSON output to a file named 'annotations.json'.
+        run: sqlfluff lint --config Core/DB.SDK/config.sqlfluff --format github-annotation --annotation-level warning --nofail ${{ steps.changed-sql-files.outputs.all_changed_files }} > annotations.json
+        ## The 'fix' command is commented out. If enabled, it would automatically fix linting errors instead of just reporting them.
+        #run: sqlfluff fix --config Core/DB.SDK/config.sqlfluff ${{ steps.changed-sql-files.outputs.all_changed_files }}
+
+      # Step 7: Use an action to display the linting results as annotations in the PR.
+      - name: Annotate
+        uses: yuzutech/annotations-action@v0.5.0
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          title: "SQLFluff Lint"
+          # The action reads the linting results from the JSON file created in the previous step.
+          input: "./annotations.json"
+
+      # Step 8: Run a Python script to create a Jira ticket.
+      - name: Ticket Creation
+        id: ticket_creation
+        run: |
+          pip install requests   # Install necessary packages for the script.
+          python .github/actions/create_db_ticket.py
+        env:
+          # Pass various pieces of GitHub context and secrets as environment variables to the Python script.
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_TOKEN_DB: ${{ secrets.JIRA_TOKEN_DB }}
+          PR_URL: ${{ toJson(github.event.pull_request._links.html.href) }}
+          REPO_NAME: ${{ toJson(github.repository) }}
+          HEAD_REF: ${{ toJson(github.head_ref) }}
+          SQL_DIFFS: ${{ env.DIFFS }}
+          SQL_FILES: ${{ steps.changed-sql-files.outputs.any_changed}}
+
+  # The second job, which is dependent on the first one.
+  pr-comment:
+    # 'needs' specifies that this job will only start after 'lint-sql-files' completes successfully.
+    needs: lint-sql-files
+    # This job only runs IF the 'output1' from the previous job is exactly 'created'.
+    if: ${{ needs.lint-sql-files.outputs.output1 == 'created' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the repo (required for some CLI operations).
+      - id: repoCheckout
+        uses: actions/checkout@v4
+
+      # Step 2: Post a comment on the pull request using the GitHub CLI.
+      - name: Comment PR
+        id: pr_comment
+        # The 'gh pr comment' command targets the specific PR number and posts a formatted message.
+        run: gh pr comment $PR_NUMBER --body "A database ticket has been created for this PR. Ticket Link - $DB_TICKET_LINK"
+        env:
+          # Provides the necessary token for the GitHub CLI to authenticate.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The PR number is taken from the event payload that triggered the workflow.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The ticket link is taken from the output of the 'lint-sql-files' job.
+          DB_TICKET_LINK: ${{ needs.lint-sql-files.outputs.output2 }}

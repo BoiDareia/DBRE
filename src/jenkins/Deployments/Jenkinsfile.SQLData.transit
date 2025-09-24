@@ -1,0 +1,749 @@
+import groovy.json.JsonOutput
+
+Void assumeRoleSQLServer(targetenv) {
+    TARGETENV = "${targetenv.name}"
+    SESSION = "${targetenv.session}"
+    FILE = "${env.WORKSPACE}\\assumeroleSQLServer.txt"
+    println "Assume Role in ${TARGETENV} Account from the file ${FILE}"
+    bat(returnStdout:true, script: "aws sts assume-role --role-arn ${TARGETENV} --role-session-name ${SESSION} > ${FILE}")
+    
+    def props = readJSON file: "${FILE}"
+
+    AWS_ACCESS_KEY_ID = props['Credentials']['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = props['Credentials']['SecretAccessKey']
+    AWS_SESSION_TOKEN = props['Credentials']['SessionToken']
+
+    env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+    env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+    env.AWS_SESSION_TOKEN = AWS_SESSION_TOKEN
+
+    println(env.AWS_ACCESS_KEY_ID)
+    println(env.AWS_SECRET_ACCESS_KEY)
+    println(env.AWS_SESSION_TOKEN)
+
+    bat(returnStdout:true, script: "aws sts get-caller-identity --output text --query Account")
+}
+
+pipeline {
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+        timeout (time: 50, unit: 'MINUTES')
+    } 
+	
+	environment {
+        SUPPORT_GROUP = 'dba@company.com'
+        SETCMDOFF = bat(returnStdout:true, script: '@echo off')
+        AWS_ACC_ID = bat(script: '@echo off && aws sts get-caller-identity --output text --query "Account"', returnStdout: true).trim()
+        PRODUCTION = 'account-number'
+        DEVQA = 'account-number'
+        STG = 'account-number'
+		QA = 'account-number'
+		BASE_LOCATION = 'C:\\src\\'
+    }
+	
+
+	parameters { 
+		choice(name: 'SELECT_ENVIRONMENT',
+            choices: ['DEV','QA','STG','PROD']
+        )
+		
+        string (
+            name: 'RELEASE',
+            description: "Provide the name of the release version. For example: v1.0.0" )
+
+        booleanParam (
+            name: 'ISTAG',
+            description: "Set to true if the provided release version is a tag, false if it is for a branch. (Prod is typically the only environment we use Tags in)",
+            defaultValue: false)
+
+        choice (
+            name: 'REGION',
+            description: "Choose the region you want to deploy database changes for",
+            choices: 'EU\nUS')
+
+        choice (
+            name: 'DATABASE_SCHEMA',
+            description: "Choose the database schema you want to deploy database changes for.",
+            choices: 'BatchService\nBulkShipping\nClientPortal\nCore\nHcpPortal\nNotes\nOrderFlowApiGateway\nOrderFlowParticipant\nProductCatalog\nQuestionnaire\nShop\nsqlserver_datatools_testing')
+		
+		choice (
+            name: 'DEPLOYMENT_TIME',
+            description: "Choose Scripts For Before Or After Code Deployment.",
+            choices: 'BeforeDeploy\nAfterDeploy')
+		
+		choice (
+            name: 'STATUS',
+            description: "Choose if this is a rollout or a rollback.",
+            choices: 'Rollout\nRollback')
+    }
+	
+	agent {
+        node {
+            label "Jenkins-DB"
+        }
+    }
+	
+	stages{
+		stage('DEFINE VARIABLES') {
+            steps {
+                script {
+                    println "AWS account used is: ${AWS_ACC_ID}"
+
+                    switch(SELECT_ENVIRONMENT) {
+                        case "PROD":
+                            EXECUTE = "true"
+                            env.AWSENV = "production"
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+							ISTAG = "true"
+                            break
+                        case "DEV":
+                            EXECUTE = "true"
+                            env.AWSENV = "dev"
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+                            break
+                        case "STG":
+                            EXECUTE = "true"
+                            env.AWSENV = "stg"
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'							
+                            break
+						case "QA":
+                            EXECUTE = "true"
+                            env.AWSENV = "qa"
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'							
+                            break
+                        default:
+                            println "This AWS account: ${AWS_ACC_ID} is not part of deployment process or something went terribly wrong "
+                            EXECUTE = "false"               
+                            break              
+                    }
+
+					assumeRoleSQLServer([name: "${ROLE_ARN}", session: "sqlserver-pipeline"])  	
+
+					if ("${REGION}" == "EU"){          
+					
+						if ("${DATABASE_SCHEMA}" == "HcpPortal") {
+							println "There is no HcpPortal database for the EU region!"
+							EXECUTE = "false" 
+							
+							exit 0
+                        }
+						
+						// We are disabling the ClientPortal database for the EU region
+						if ("${DATABASE_SCHEMA}" == "ClientPortal") {
+							println "There is no ClientPortal database for the EU region!"
+							EXECUTE = "false" 
+							
+							exit 0
+                        }
+		
+                    }
+                    else {
+                        env.AWS_REGION = 'us-east-1'               
+                        
+						if ("${DATABASE_SCHEMA}" == "Questionnaire") {
+							println "There is no Questionnaire database for the US region!"
+							EXECUTE = "false" 
+							
+							exit 0
+                        }
+
+                        if ("${DATABASE_SCHEMA}" == "BatchService") {
+							println "There is no BatchService database for the US region!"
+							EXECUTE = "false" 
+							
+							exit 0
+                        }
+						
+						if ("${DATABASE_SCHEMA}" == "ProductCatalog") {
+							println "There is no ProductCatalog database for the US region!"
+							EXECUTE = "false" 
+							
+							exit 0
+                        }
+                    }
+
+                    println "Region: ${env.AWS_REGION} environment: ${SELECT_ENVIRONMENT} Database Schema: ${DATABASE_SCHEMA}" 
+					
+					BUILD_TRIGGER_BY = "${currentBuild.getBuildCauses()[0].shortDescription}"
+					echo "BUILD_TRIGGER_BY: ${BUILD_TRIGGER_BY}"
+
+					// Add Display Name to identify deployment
+                    currentBuild.displayName = "${DATABASE_SCHEMA}-${SELECT_ENVIRONMENT}-${REGION}-${RELEASE}-${DEPLOYMENT_TIME}-${STATUS}" 					
+				}
+			}
+		}
+		stage ('PROCESS DATA CHANGES') {
+            steps{
+				script{
+                powershell(returnStdout: true, script: '''
+				
+				$ErrorActionPreference = 'Stop'
+				Set-Location "C:\\src\\Database-deployment\\SQLData"
+				
+				. .\\ReleaseChangeFunctions.ps1
+				. .\\gitFunctions.ps1
+				
+				#Environment Variables
+				[string] $region = $env:REGION
+				[string] $environment = $env:AWSENV
+				[string] $env2 = $env:SELECT_ENVIRONMENT
+				[string] $databaseName = $env:DATABASE_SCHEMA
+				[string] $configDBname = $env:DATABASE_SCHEMA
+				[string] $branch_name = $env:RELEASE
+				[string] $strIsTag = $env:ISTAG #true if it is a tag that we are checking out.
+				[bool] $isTag = ($strIsTag -eq 'True')
+				[string] $deployment_time = $env:DEPLOYMENT_TIME
+				[string] $status = $env:STATUS
+				
+				[string] $version = $branch_name
+				if ($version.ToString().StartsWith("team/") -eq $true){
+					$version = $version.ToString().Replace('team/','')
+				}
+				if ($version -match "-rc"){
+					$idx=$version.IndexOf("-rc")
+					$version=$version.Substring(0,$idx)
+				}
+				
+				#Other Needed Variables
+				[string] $base_location = $env:BASE_LOCATION #DB repository's base location
+				#remap to correct environment folder
+				$base_location=$base_location.Replace('C:\\src\\','C:\\src\\Release_repos\\'+$env2.ToUpper()+'\\')
+				
+				
+				[bool] $proceed = $true # default is true
+				[string] $toThrow ##For holding failure messages
+				[string] $logsLocation="C:\\src\\Database-deployment\\SQLData\\logs" 
+				[string] $logfile = "$logsLocation\\$environment\\${databaseName}_${version}_${status}_$(Get-Date -Format "yyyyMMdd_HHmmss").log"
+				[bool] $slack = $true
+				[bool] $jira = $true
+				[string []] $tickets=""
+				[string] $curTicket=""
+				[string] $header=""
+				[int] $fileCount=0
+				[int] $filesProcessedRollback=0 #count for the 1st part of AfterDeploy Rollback
+				[int] $fileCountRollback=0 #count for the 1st part of AfterDeploy Rollback
+				$LastExitCode = 0
+				
+				if($databaseName -eq "BatchService")
+				{
+					$configDBname = "batchservice"
+				}
+				if($databaseName -eq "BulkShipping")
+				{
+					$configDBname = "bulkshipping"
+				}
+				if($databaseName -eq "ClientPortal")
+				{
+					$configDBname = "clientportal"
+				}
+				if($databaseName -eq "Core")
+				{
+					$configDBname = "core"
+				}
+				if($databaseName -eq "HcpPortal")
+				{
+					$configDBname = "hcpportal"
+				}
+				if($databaseName -eq "Notes")
+				{
+					$configDBname = "notes"
+				}
+				if($databaseName -eq "OrderFlowApiGateway")
+				{
+					$configDBname = "orderflowauth"
+				}
+				if($databaseName -eq "OrderFlowParticipant")
+				{
+					$configDBname = "orderflowparticipant"
+				}
+				if($databaseName -eq "ProductCatalog")
+				{
+					$configDBname = "product"
+				}
+				if($databaseName -eq "Questionnaire")
+				{
+					$configDBname = "questionnaire"
+				}
+				if($databaseName -eq "Shop")
+				{
+					$configDBname = "frontend"
+				}
+				## Adding test database
+				if($databaseName -eq "sqlserver_datatools_testing")
+				{
+					$configDBname = "sqlserver_datatools_testing"
+				}
+
+				
+
+				Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+				Write-Output "Database: $configDBname " | Tee-Object $logfile
+
+				try {
+					##VALIDATE INPUT's
+
+					if(($deployment_time -ne "BeforeDeploy") -and ($deployment_time -ne "AfterDeploy")){
+						throw "Invalid value for deployment_time supplied: $deployment_time . This must be either BeforeDeploy or AfterDeploy."
+					}
+
+					if(($status -ne "Rollout") -and  ($status -ne "Rollback")){
+						throw "Invalid value for status supplied: $status . This must be either Rollout or Rollback."
+					}
+
+
+					if($environment -eq "production" -and $branch_name -like "team*" ) {
+						throw "A branch can't be deployed in PROD, only a tag!"
+					}
+
+					else{
+						Write-Output "Git Checkout: $branch_name " | Tee-Object $logfile -Append
+					}
+					
+					Write-Output "Environment: $environment " | Tee-Object $logfile -Append
+					Write-Output "Region: $region " | Tee-Object $logfile -Append
+					Write-Output "Action: $status $deployment_time " | Tee-Object $logfile -Append
+					
+					#####
+					# If no repo - then clone
+					# then checkout branch or tag
+					# file path should then be up to date
+					#####
+					
+					GitCheckOutBranch $configDBname $base_location $branch_name $isTag $logfile
+
+					#Building the file location
+					[string] $fullLocation = buildFileLocation $configDBname $base_location $version $deployment_time $status
+
+					Write-Output "Scripts Location: $fullLocation " | Tee-Object $logfile -Append
+					Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+
+					
+
+					#Confirm Location Exists
+					$proceed = ConfirmLocationExists $fullLocation 
+
+
+					if($proceed -eq $True){
+					
+							if($jira){
+								$jiraCred = GetJiraCredentials $region
+								$session= GetJiraSession $jiraCred
+							}
+
+							#Write-Output "Location Exists: $fullLocation" | Tee-Object $logfile -Append 
+
+							#Get contents of the manifest file
+							[string] $manifestList = GetManifestList $fullLocation
+							$header= [IO.File]::ReadAllText($logfile)
+
+							$manifestList = $manifestList.TrimStart(" ")
+							#Behaviour becomes different only if rollback and afterdeploy options are provided -- this needs additional scripts from the rollabck beforedeploy location.
+							if($status -eq "Rollback" -and $deployment_time -eq "AfterDeploy" ){
+								
+								#Write-Output "`n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+								#Write-Output "Starting $status $deployment_time $version" | Tee-Object $logfile -Append
+								#Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+
+
+								#1 Get full location for the before deploy rollback
+								#2 confirm location in step 2 exists
+								#3 where exists apply the after deploy rollback scripts
+								#4 confirm there are files for before deploy rollback
+								#5 where exists apply the before deploy rollback scripts 
+								
+								#Building the file location - step 1
+								[string] $secondFullLocation = buildFileLocation $configDBname $base_location $version "BeforeDeploy" $status
+								#Step 2
+								[bool] $secondProceed = ConfirmLocationExists $secondFullLocation
+								
+								#step 3
+								if($manifestList -eq "EMPTY"){
+									Write-Output "No Files for: $version $deployment_time $status" | Tee-Object $logfile -Append
+									#raise slack notification so that it is highlighted that no scripts where defined for rollout
+								}
+								else{                   
+									#apply the scripts in order
+									$targetConnectionString = GetConnectionString $region $configDBname $environment 
+									
+
+									#Splitting list of files into an array
+									$manifestList = $manifestList.TrimStart(" ")
+									[string[]] $fileList = $manifestList.Split(" ")
+
+									$fileCount=$fileList.Length
+									$fileCountRollback=$fileCount
+									
+									#Execute Each script in the list
+									for($i=0; $i -lt $fileList.Length; $i++){
+										#function to create the connection and execute all scripts in the manifest file
+										if($jira){
+											$curTicket= GetRCTicket $jiraCred $fileList[$i] $databaseName $version $deployment_time $status
+										}
+										
+										$executionOutput= ExecuteSQLScripts $fullLocation $fileList[$i] $targetConnectionString $logfile
+										if($jira){
+											$tickets+=$curTicket
+											$comment=$header+$executionOutput
+											CommentRCTicket $jiraCred $curTicket $comment
+										}
+										$filesProcessedRollback=$i+1
+									}
+										
+									#Needs a slack notification as well to confirm this has been done
+									Write-Output "`n$status completed for $deployment_time of $version`n" | Tee-Object $logfile -Append
+
+
+								}
+								#Write-Output "`n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+								#Write-Output "Starting $status BeforeDeploy $version" | Tee-Object $logfile -Append
+								#Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+
+								#Step 4
+								if($secondProceed -eq $True ){
+									[string] $secondmanifestList = GetManifestList $secondFullLocation
+									$header= [IO.File]::ReadAllText($logfile)
+
+									$secondmanifestList = $secondmanifestList.TrimStart(" ")
+
+									#step 5
+									if($secondmanifestList -eq "EMPTY"){
+										Write-Output "No Files for: $version BeforeDeploy $status" | Tee-Object $logfile -Append
+										#raise slack notification so that it is highlighted that no scripts where defined for rollout
+									}
+									else{
+
+										#apply the scripts in order
+
+										
+										$targetConnectionString = GetConnectionString $region $configDBname $environment 
+
+										#function to create the connection and execute all scripts in the manifest file
+					
+										#Splitting list of files into an array
+										$secondmanifestList = $secondmanifestList.TrimStart(" ")
+										[string[]] $secondfileList = $secondmanifestList.Split(" ")
+
+										$fileCount=$secondfileList.Length
+										
+										#Execute Each script in the list
+										for($i=0; $i -lt $secondfileList.Length; $i++){
+											#function to create the connection and execute all scripts in the manifest file
+
+											if($jira){
+												$curTicket= GetRCTicket $jiraCred $secondfileList[$i] $databaseName $version $deployment_time $status
+											}
+											
+											$executionOutput= ExecuteSQLScripts $fullLocation $secondfileList[$i] $targetConnectionString $logfile
+											if($jira){
+												$tickets+=$curTicket
+												$comment=$header+$executionOutput
+												CommentRCTicket $jiraCred $curTicket $comment
+											}
+										}
+											
+										#Needs a slack notification as well to confirm this has been done
+										Write-Output "`n$status completed for BeforeDeploy of $version`n" | Tee-Object $logfile -Append
+										 
+									}
+
+								}
+								else{
+									Write-Output "No Files for: $version BeforeDeploy $status" | Tee-Object $logfile -Append
+									Write-Output "Ending Process" | Tee-Object $logfile -Append
+								}
+
+							}
+							else{
+								#Write-Output "`n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+								#Write-Output "Starting $status $deployment_time $version" | Tee-Object $logfile -Append
+								#Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+								#Just deploying scripts from a single location with other combinatons
+								$manifestList = $manifestList.TrimStart(" ")
+								#Process should just stop if there are no files to be applied
+								if($manifestList -eq "EMPTY"){
+									Write-Output "No Files for: $version $deployment_time $status"
+									Write-Output "STOPPING PROCESS - NOTHING TO EXECUTE"
+									#raise slack notification so that it is highlighted that no scripts where defined for rollout
+								}
+								else{
+
+									$targetConnectionString = GetConnectionString $region $configDBname $environment
+					
+									#Splitting list of files into an array
+									$manifestList = $manifestList.TrimStart(" ")
+									[string[]] $fileList = $manifestList.Split(" ")
+
+									$fileCount=$fileList.Length
+									
+									#Execute Each script in the list
+									for($i=0; $i -lt $fileList.Length; $i++){
+										#function to create the connection and execute all scripts in the manifest file
+										if($jira){
+											$curTicket= GetRCTicket $jiraCred $fileList[$i] $databaseName $version $deployment_time $status
+										}
+									   
+										$executionOutput= ExecuteSQLScripts $fullLocation $fileList[$i] $targetConnectionString $logfile
+										if($jira){
+											$tickets+=$curTicket
+											$comment=$header+$executionOutput
+											CommentRCTicket $jiraCred $curTicket $comment
+										}
+									}
+										
+									#Needs a slack notification as well to confirm this has been done
+									Write-Output "`n$status completed for $deployment_time of $version" | Tee-Object $logfile -Append
+								   
+
+								}
+
+							}
+					}
+					else{
+						#If the directory doesn't exist exit the process and notify that there were no rollout scripts for the release
+						#Put a slack notification here to send a message there where no RC's for $status for version $version of $databaseName
+
+						Write-Output "No Files for: $version $deployment_time $status" | Tee-Object $logfile -Append
+						#This needs to be a slack notification as well
+						
+						#In the event there is a rollback called for and AfterDeploy/Rollback structure doesn't exist we need to handle
+						#checking the rollback for the BeforeDeploy here
+
+						if($status -eq "Rollback" -and $deployment_time -eq "AfterDeploy" -and $proceed -eq $False){
+						
+							if($jira){
+								$jiraCred = GetJiraCredentials $region
+								$session= GetJiraSession $jiraCred
+							}
+							
+							#Write-Output "`n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+							#Write-Output "Starting $status $deployment_time $version" | Tee-Object $logfile -Append
+							#Write-Output "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" | Tee-Object $logfile -Append
+							#Building the file location - step 1
+							[string] $secondFullLocation = buildFileLocation $configDBname $base_location $version "BeforeDeploy" $status
+							#Step 2
+							[bool] $secondProceed = ConfirmLocationExists $secondFullLocation
+
+							 #Step 4
+							if($secondProceed -eq $True ){
+								[string] $secondmanifestList = GetManifestList $secondFullLocation
+								$header= [IO.File]::ReadAllText($logfile)
+
+								$secondmanifestList = $secondmanifestList.TrimStart(" ")
+								#step 5
+								if($secondmanifestList -eq "EMPTY"){
+									Write-Output "No Files for: $version BeforeDeploy $status" | Tee-Object $logfile -Append
+									#raise slack notification so that it is highlighted that no scripts where defined for rollout
+								}
+								else{
+							
+									#apply the scripts in order
+							
+									
+									$targetConnectionString = GetConnectionString $region $configDBname $environment
+						 
+									#function to create the connection and execute all scripts in the manifest file
+
+								
+									#Splitting list of files into an array
+									$secondmanifestList = $secondmanifestList.TrimStart(" ")
+									[string[]] $secondfileList = $secondmanifestList.Split(" ")
+
+									$fileCount=$secondfileList.Length
+													
+									#Execute Each script in the list
+									for($i=0; $i -lt $secondfileList.Length; $i++){
+										#function to create the connection and execute all scripts in the manifest file
+										if($jira){
+											$curTicket= GetRCTicket $jiraCred $secondfileList[$i] $databaseName $version $deployment_time $status
+										}
+										
+										$executionOutput= ExecuteSQLScripts $fullLocation $secondfileList[$i] $targetConnectionString $logfile
+										if($jira){
+											$tickets+=$curTicket
+											$comment=$header+$executionOutput
+											CommentRCTicket $jiraCred $curTicket $comment
+										}
+									}
+														
+									#Needs a slack notification as well to confirm this has been done
+									Write-Output "`n$status completed $logfile $deployment_time of $version" | Tee-Object $logfile -Append              
+							
+								}
+							}
+							else{
+								Write-Output "No Files for: $version BeforeDeploy $status" | Tee-Object $logfile -Append
+								Write-Output "Ending Process" | Tee-Object $logfile -Append
+							}
+						}
+					}
+
+						if($fileCountRollback -gt 0)   
+						{
+							$header+="`n`n*Applied $filesProcessedRollback/$fileCountRollback files for Rollback AfterDeploy*"
+							$header+="`n*Applied $i/$fileCount files for $status BeforeDeploy*"
+						}   
+						else{
+							if($fileCount -eq 0)
+							{
+								$header+="No data files to apply!"
+							}
+							else
+							{
+								$header+="`n`n*Applied $i/$fileCount files*"
+							}
+
+						}
+						
+									$env:SQLCMDPASSWORD=
+									$env:SQLCMDUSER=
+
+									#transition all tickets after a successful run
+									if($jira){
+										for($i=1; $i -lt $tickets.Length; $i++){
+											TransitionRCTicket $jiraCred $tickets[$i] $status $env2
+											$tickets[$i] = "`nhttps://company.atlassian.net/browse/"+$tickets[$i]
+
+										}
+										
+										Remove-JiraSession $session 
+									}
+
+									if($slack){
+										$slackcontent = "*Release Changes Deployment*`n`n"+$header
+										$slackcontent +="`n`n*[$databaseName] $status of $version $deployment_time data changes in $environment $region succeeded!* :tada:"
+										if($tickets.Length -gt 1) #if at least 1 ticket was processed
+										{
+											$slackcontent +="`n*Applied the following RC tickets:* $tickets"
+										}
+
+										if($environment -eq "production")
+										{
+											$payload = @{
+											 "channel" = "#pub-release-coord-prod"
+											  "text" = $slackcontent
+											}
+
+											Invoke-WebRequest -UseBasicParsing `
+											 -Body (ConvertTo-Json -Compress -InputObject $payload) `
+											 -Method Post `
+											 -Uri "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+										}
+										else
+										{
+											$payload = @{
+											 "channel" = "#pub-release-coord-preprod"
+											  "text" = $slackcontent
+											}
+
+											Invoke-WebRequest -UseBasicParsing `
+											 -Body (ConvertTo-Json -Compress -InputObject $payload) `
+											 -Method Post `
+											 -Uri "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+										}
+									} 
+									
+									exit $LastExitCode
+				}
+				catch{
+					$toThrow = ("Issue with RC Deploy: ''{0} {1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+					if($jira -and $curTicket -ne ""){
+						$fullerrorlog= [IO.File]::ReadAllText($logfile)
+						$fullerrorlog+=$toThrow
+						CommentRCTicket $jiraCred $curTicket $fullerrorlog
+					}
+					
+					$LastExitCode = 1
+				}
+				finally{
+					if ($toThrow) {
+						Write-Output $toThrow | Tee-Object $logfile -Append
+
+						if($fileCountRollback -gt 0)   
+						{
+							$header+="`n`n*Applied $filesProcessedRollback/$fileCountRollback files for Rollback AfterDeploy*"
+							$header+="`n*Applied $i/$fileCount files for $status BeforeDeploy*"
+						}   
+						else{
+							if($fileCount -eq 0)
+							{
+								$header+="No data files to apply!"
+							}
+							else
+							{
+								$header+="`n`n*Applied $i/$fileCount files*"
+							}
+						}
+
+
+						$env:SQLCMDPASSWORD=
+						$env:SQLCMDUSER=
+					  
+						#transition all successful tickets
+						if($jira){
+							for($i=1; $i -lt $tickets.Length; $i++){
+								TransitionRCTicket $jiraCred $tickets[$i] $status $env2
+								$tickets[$i] = "`nhttps://company.atlassian.net/browse/"+$tickets[$i]
+							}
+							Remove-JiraSession $session 
+						}
+
+						if($slack){
+							$slackcontent = "*Release Changes Deployment*`n`n"+$header
+							$slackcontent +="`n*[$databaseName] $status of $version $deployment_time data changes in $environment $region failed!* :scream: <!subteam^S0237SK1E67>"
+							if($tickets.Length -gt 1) #if at least 1 ticket was processed
+							{
+								$slackcontent +="`n*Applied the following RC tickets:* $tickets"
+								$slackcontent +="`n`n*FAILED!*`nhttps://company.atlassian.net/browse/$curTicket"
+							}
+							
+
+							if($environment -eq "production")
+							{
+								$payload = @{
+								 "channel" = "#pub-release-coord-prod"
+								  "text" = $slackcontent
+								}
+
+								Invoke-WebRequest -UseBasicParsing `
+								 -Body (ConvertTo-Json -Compress -InputObject $payload) `
+								 -Method Post `
+								 -Uri "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+							}
+							else
+							{
+								$payload = @{
+								 "channel" = "#pub-release-coord-preprod"
+								  "text" = $slackcontent
+								}
+
+								Invoke-WebRequest -UseBasicParsing `
+								 -Body (ConvertTo-Json -Compress -InputObject $payload) `
+								 -Method Post `
+								 -Uri "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+							}
+									
+							Throw $toThrow
+						}
+
+						exit $LastExitCode						
+									 
+					}
+				}
+							
+				#########################################################################################################################################
+                ''')
+				}
+			}
+		}
+		
+	}	
+	post {
+		cleanup {        
+			cleanWs(
+				deleteDirs: true,
+				notFailBuild: true,
+				)
+		}
+	}
+	
+}

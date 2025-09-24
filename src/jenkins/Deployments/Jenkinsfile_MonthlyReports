@@ -1,0 +1,631 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import hudson.model.*
+
+def data = [
+
+    // Defining overall general variables to be used on the pipeline to a single point of change
+    // Actual environment
+    "prod-us-ds": 'rdsuse.Company.com',
+    "prod-us-key": 'db-prod-use',
+    "prod-eu-ds": 'rdseuw.Company.com',
+    "prod-eu-key": 'db-prod-euw',
+	"prod-idp-ds": 'idp-use.Company.com',
+	"prod-idp-key": 'sql-idp-prod-use',
+
+    // Test environment
+    "dev-us-ds": 'rdsuse.Company-dev2.com',
+    "dev-us-key": 'sql-dev-use',
+    "dev-eu-ds": 'rdseuw.Company-dev2.com',
+    "dev-eu-key": 'sql-dev-euw',
+    // Regions
+    "N. Virginia": 'us-east-1',
+    "Ireland": 'eu-west-1',
+    // Roles 
+    "prod-role": 'arn:aws:iam::account-number:role/team-role',
+    "dev-role": 'arn:aws:iam::account_number:role/team-role'
+
+]
+
+Void assumeRoleSQLServer(targetenv) {
+    TARGETENV = "${targetenv.name}"
+    SESSION = "${targetenv.session}"
+    FILE = "${env.WORKSPACE}\\assumeroleSQLServer.txt"
+    println "Assume Role in ${TARGETENV} Account from the file ${FILE}"
+    bat(returnStdout:true, script: "aws sts assume-role --role-arn ${TARGETENV} --role-session-name ${SESSION} > ${FILE}")
+    
+    def props = readJSON file: "${FILE}"
+
+    AWS_ACCESS_KEY_ID = props['Credentials']['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = props['Credentials']['SecretAccessKey']
+    AWS_SESSION_TOKEN = props['Credentials']['SessionToken']
+
+    env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+    env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+    env.AWS_SESSION_TOKEN = AWS_SESSION_TOKEN
+
+    println(env.AWS_ACCESS_KEY_ID)
+    println(env.AWS_SECRET_ACCESS_KEY)
+    println(env.AWS_SESSION_TOKEN)
+
+    bat(returnStdout:true, script: "aws sts get-caller-identity --output text --query Account")
+}
+
+
+pipeline {
+
+
+    agent {
+        node { 
+            label "Jenkins-DB" 
+        }
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr:'10'))
+        timeout (time: 180, unit: 'MINUTES')
+    } 
+
+    parameters {    
+		choice(name: 'ENVIRONMENT',
+			choices: ['PROD', 'DEV']
+        )
+		booleanParam (name: 'sec_review',
+             description: "Generate Security Review report",
+               defaultValue: true)
+		booleanParam (name: 'index_review',
+             description: "Generate Index Review report",
+               defaultValue: true)
+
+        string(name: 'USER'
+        )
+    }
+
+    stages {
+		stage("ASSUME - PROD")
+		{
+			when 
+			{
+				expression { params.ENVIRONMENT == 'PROD' }
+			}
+			steps
+			{
+				script{
+					println "Generating report for PROD"
+					
+					ROLE_ARN = data.get("prod-role")
+					env.SECRETMANAGERID_US = data.get("prod-us-key")
+					env.DATASOURCE_US = data.get("prod-us-ds")
+					env.SECRETMANAGERID_EU = data.get("prod-eu-key")
+					env.DATASOURCE_EU = data.get("prod-eu-ds")
+					env.SECRETMANAGERID_IDP = data.get("prod-idp-key")
+					env.DATASOURCE_IDP = data.get("prod-idp-ds")
+					
+					assumeRoleSQLServer([name: "${ROLE_ARN}", session: "sqlserver-pipeline"]) 
+					
+					now = new Date()
+                    now_month = now.format("YYYY_MM", TimeZone.getTimeZone('UTC'))
+					
+					currentBuild.displayName = "Reports-${ENVIRONMENT}-${now_month}"  
+				}
+			}
+		}
+		stage("ASSUME - DEV")
+		{
+			when 
+			{
+				expression { params.ENVIRONMENT == 'DEV'  }
+			}
+			steps
+			{
+				script{
+					println "Generating report for DEV"
+					
+					ROLE_ARN = data.get("dev-role")
+					env.SECRETMANAGERID_US = data.get("dev-us-key")
+					env.DATASOURCE_US = data.get("dev-us-ds")
+					env.SECRETMANAGERID_EU = data.get("dev-eu-key")
+					env.DATASOURCE_EU = data.get("dev-eu-ds")
+					
+					assumeRoleSQLServer([name: "${ROLE_ARN}", session: "sqlserver-pipeline"]) 
+					
+					now = new Date()
+                    now_month = now.format("YYYY_MM", TimeZone.getTimeZone('UTC'))
+					
+					currentBuild.displayName = "Reports-${ENVIRONMENT}-${now_month}"  
+				}
+			}
+		}
+		
+	
+	
+        stage ('CHECK VARIABLES - SEC REVIEW') {
+			when {
+                expression { params.sec_review == true }
+			}
+            steps {
+                script{
+
+                    env.WORKSPACE = pwd()
+
+                    println "User: ${USER}"
+
+                    // This will force the environmen to be PROD on automatic Job triggering
+                    if(currentBuild.rawBuild.getCause(Cause.UserIdCause) != null) {
+                        env.userId = currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserId()
+                        env.AWSDEPLOY = "Manual"
+                        env.startedByTimer = false
+                        
+                    }else {
+                            env.AWSDEPLOY = "Automatic"
+                            env.startedByTimer = true
+                            env.userId = USER
+                    }
+
+                    println "StartedByTimer: ${env.startedByTimer}"
+                    println "Environment: ${ENVIRONMENT}"
+                    println "Report: sec-review-file"
+                    println "AWSDEPLOY: ${env.AWSDEPLOY}"
+                    println "USER: ${env.userId}"
+
+
+                    def listOfGroupsAllowedToDeploySecFile = ["Jennifer Lopez","Colm Brown","Molly White","Brian Junior"]
+
+                    if ("${listOfGroupsAllowedToDeploySecFile}".contains("${env.userId}") || env.AWSDEPLOY == "Automatic"){
+                        println "User is Approved to run this Job"
+
+                        println "Triggered by $env.userId"
+                    }else {
+                        println "User $env.userId is not authorized to run this pipeline"
+                        currentBuild.result = 'ABORTED'
+                        error("User not authorized to run this pipeline")
+                    }
+                  
+                    now = new Date()
+                    //now_formatted = now.format("YYYY.MM.dd.HH.mm", TimeZone.getTimeZone('UTC'))
+
+                    now_month = now.format("YYYY_MM", TimeZone.getTimeZone('UTC'))
+                    month = now.format("MM", TimeZone.getTimeZone('UTC'))
+
+					println "Will generate the Security Review File"
+
+					env.USERS_FILE = "SecurityUserRequest_${now_month}.xlsx"
+
+					if(env.startedByTimer){
+						switch(month) {
+						case ["01", "04", "07", "10"]:
+							SLACK_USER_RESPONSE = (slackSend(channel: "security-review", color: "good",username: "User Quarterly Requests - Security", message: "Check the attached files for user information requested in ${ENVIRONMENT} env"))
+							break
+						default:
+							SLACK_USER_RESPONSE = (slackSend(channel: "security-review", color: "good",username: "User Manual Requests - Security", message: "Check the attached files for user information requested in ${ENVIRONMENT} env"))          
+							break  
+						}
+					}else {
+						SLACK_USER_RESPONSE = (slackSend(channel: "security-review", color: "good",username: "User Manual Requests - Security", message: "Check the attached files for user information requested in ${ENVIRONMENT} env"))
+					}  
+                }
+            }
+        }
+
+        stage('SECURITY - RUN PIPELINE FOR US') {
+			when {
+                expression { params.sec_review == true }
+			}
+            steps {
+                script {
+                 
+     
+                    env.SECRETMANAGERID = env.SECRETMANAGERID_US
+
+                    env.AWS_REGION  = data.get("N. Virginia")
+
+                    env.DATASOURCE = env.DATASOURCE_US
+					
+					
+
+                    powershell(returnStdout: true, script: '''
+
+                    try{
+                        .{
+                            . .\\MonthlyReports.ps1
+                            
+                            [string] $region = "$env:AWS_REGION"
+                            [string] $userFilename = "$env:WORKSPACE\\$env:USERS_FILE" 
+							
+                            [string] $dataSource = "$env:DATASOURCE" 
+                            [string] $secretid = $env:SECRETMANAGERID
+                            $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                            [string] $username = $secretvalue.username
+                            [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                            $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword)
+
+                            ## Get and Deliver File with Info
+                            [string] $Output=ExportToFileUsers $userFilename $dataSource $dataSource $credentials
+                            } | Out-Null
+                            return $Output 
+
+                            
+                        }
+                        catch{
+
+                            $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                            $LastExitCode = 1
+                        }
+                        finally{
+                            .{
+                                
+                                if ($toThrow){
+                                    Write-Error $toThrow
+                                }
+                                } | Out-Null
+                                
+                                exit $LastExitCode
+                        }
+
+                    ''')
+
+                }
+                    
+
+
+            }
+        }
+
+        stage('SECURITY - RUN PIPELINE FOR EU') {
+			when {
+                expression { params.sec_review == true }
+			}
+            steps {
+                script {
+
+                    env.SECRETMANAGERID = env.SECRETMANAGERID_EU
+
+                    env.AWS_REGION  = data.get("Ireland")
+
+                    env.DATASOURCE = env.DATASOURCE_EU 
+
+                    powershell(returnStdout: true, script: '''
+
+                    try{
+                        .{
+                            . .\\MonthlyReports.ps1
+
+                            [string] $region = "$env:AWS_REGION"
+                            [string] $userFilename = "$env:WORKSPACE\\$env:USERS_FILE" 
+                
+                            [string] $dataSource = "$env:DATASOURCE" 
+                            [string] $secretid = $env:SECRETMANAGERID
+                            $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                            [string] $username = $secretvalue.username
+                            [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                            $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword)
+
+                            ## Get and Deliver File with Info
+                            [string] $Output=ExportToFileUsers $userFilename $dataSource $dataSource $credentials
+                            } | Out-Null
+                            return $Output
+
+                            
+                        }
+                        catch{
+
+                            $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                            $LastExitCode = 1
+                        }
+                        finally{
+                            .{
+                                
+                                if ($toThrow){
+                                    Write-Error $toThrow
+                                }
+                                } | Out-Null
+                                
+                                exit $LastExitCode
+                        }
+
+                    ''')
+
+
+                }
+                
+
+
+            }
+        }
+		
+		stage ('CHECK VARIABLES - INDEX REVIEW') {
+			when {
+                expression { params.index_review == true }
+			}
+            steps {
+                script{
+
+                    env.WORKSPACE = pwd()
+
+                    println "User: ${USER}"
+
+                    // This will force the environmen to be PROD on automatic Job triggering
+                    if(currentBuild.rawBuild.getCause(Cause.UserIdCause) != null) {
+                        env.userId = currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserId()
+                        env.AWSDEPLOY = "Manual"
+                        env.startedByTimer = false
+                        
+                    }else {
+                            env.AWSDEPLOY = "Automatic"
+                            env.startedByTimer = true
+                            env.userId = USER
+                    }
+
+                    println "StartedByTimer: ${env.startedByTimer}"
+                    println "Environment: ${ENVIRONMENT}"
+                    println "Report: index-file"
+                    println "AWSDEPLOY: ${env.AWSDEPLOY}"
+                    println "USER: ${env.userId}"
+
+                    def listOfGroupsAllowedToDeployIndexFile = ["Jennifer Lopez","Colm Brown","Molly White","Brian Junior"]
+
+                    now = new Date()
+                    //now_formatted = now.format("YYYY.MM.dd.HH.mm", TimeZone.getTimeZone('UTC'))
+
+                    now_month = now.format("YYYY_MM", TimeZone.getTimeZone('UTC'))
+                    month = now.format("MM", TimeZone.getTimeZone('UTC'))
+
+
+                    // Swith that identify's the user for each month (INDEXES)
+                    switch(month) {
+                    case ["01", "05", "09"]:
+                        env.USER = slackUserIdFromEmail('user1@Company.com')
+                        break
+                    case ["02", "06", "10"]:
+                            env.USER = slackUserIdFromEmail('user2@Company.com')
+                        break
+                    case ["03", "07", "11"]:
+                        env.USER = slackUserIdFromEmail('user3@Company.com')
+                        break
+                    case ["04", "08", "12"]:
+                        env.USER = slackUserIdFromEmail('user4@Company.com')
+                        break
+                    default:
+                        env.USER = slackUserIdFromEmail('user5@Company.com')          
+                        break  
+                    }
+
+					if ("${listOfGroupsAllowedToDeployIndexFile}".contains("${env.userId}")){
+						println "Will generate the Index File"
+
+						env.INDEX_FILE = "MissingIndexes_${now_month}.xlsx"
+						
+						SLACK_RESPONSE = (slackSend(channel: "alerting", color: "good",username: "Missing Index Notifications", message: "Check the attached files for more information on indexes in ${ENVIRONMENT} env"))
+					}
+                }
+            }
+        }
+		
+		stage('INDEX - RUN PIPELINE FOR US') {
+			when {
+                expression { params.index_review == true }
+			}
+            steps {
+                script {
+                 
+     
+                    env.SECRETMANAGERID = env.SECRETMANAGERID_US
+
+                    env.AWS_REGION  = data.get("N. Virginia")
+
+                    env.DATASOURCE = env.DATASOURCE_US
+					
+					
+
+                    powershell(returnStdout: true, script: '''
+
+                    try{
+                        .{
+                            . .\\MonthlyReports.ps1
+                            
+                            [string] $region = "$env:AWS_REGION"
+                            [string] $indexFilename = "$env:WORKSPACE\\$env:INDEX_FILE"  
+							
+                            [string] $dataSource = "$env:DATASOURCE" 
+                            [string] $secretid = $env:SECRETMANAGERID
+                            $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                            [string] $username = $secretvalue.username
+                            [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                            $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword)
+
+                            ## Get and Deliver File with Info
+                            [string] $Output=ExportToFileIndex $indexFilename $dataSource $dataSource $credentials
+                            } | Out-Null
+                            return $Output 
+
+                            
+                        }
+                        catch{
+
+                            $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                            $LastExitCode = 1
+                        }
+                        finally{
+                            .{
+                                
+                                if ($toThrow){
+                                    Write-Error $toThrow
+                                }
+                                } | Out-Null
+                                
+                                exit $LastExitCode
+                        }
+
+                    ''')
+
+                }
+                    
+
+
+            }
+        }
+
+        stage('INDEX - RUN PIPELINE FOR EU') {
+			when {
+                expression { params.index_review == true }
+			}
+            steps {
+                script {
+
+                    env.SECRETMANAGERID = env.SECRETMANAGERID_EU
+
+                    env.AWS_REGION  = data.get("Ireland")
+
+                    env.DATASOURCE = env.DATASOURCE_EU 
+
+                    powershell(returnStdout: true, script: '''
+
+                    try{
+                        .{
+                            . .\\MonthlyReports.ps1
+
+                            [string] $region = "$env:AWS_REGION"
+                            [string] $indexFilename = "$env:WORKSPACE\\$env:INDEX_FILE"  
+   
+                            [string] $dataSource = "$env:DATASOURCE" 
+                            [string] $secretid = $env:SECRETMANAGERID
+                            $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                            [string] $username = $secretvalue.username
+                            [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                            $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword)
+
+                            ## Get and Deliver File with Info
+                            [string] $Output=ExportToFileIndex $indexFilename $dataSource $dataSource $credentials
+                            } | Out-Null
+                            return $Output
+
+                            
+                        }
+                        catch{
+
+                            $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                            $LastExitCode = 1
+                        }
+                        finally{
+                            .{
+                                
+                                if ($toThrow){
+                                    Write-Error $toThrow
+                                }
+                                } | Out-Null
+                                
+                                exit $LastExitCode
+                        }
+
+                    ''')
+
+
+                }
+                
+
+
+            }
+        }
+		
+		stage('INDEX - RUN PIPELINE FOR IDP') {
+			when {
+                expression { params.index_review == true }
+				expression { params.ENVIRONMENT == 'PROD' }
+			}
+            steps {
+                script {
+                 
+     
+                    env.SECRETMANAGERID = env.SECRETMANAGERID_IDP
+
+                    env.AWS_REGION  = data.get("N. Virginia")
+
+                    env.DATASOURCE = env.DATASOURCE_IDP
+					
+					
+
+                    powershell(returnStdout: true, script: '''
+
+                    try{
+                        .{
+                            . .\\MonthlyReports.ps1
+                            
+                            [string] $region = "$env:AWS_REGION"
+                            [string] $indexFilename = "$env:WORKSPACE\\$env:INDEX_FILE"  
+
+                            [string] $dataSource = "$env:DATASOURCE" 
+                            [string] $secretid = $env:SECRETMANAGERID
+                            $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                            [string] $username = $secretvalue.username
+                            [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                            $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword)
+							
+                            ## Get and Deliver File with Info
+                            [string] $Output=ExportToFileIndex $indexFilename $dataSource $dataSource $credentials
+                            } | Out-Null
+                            return $Output 
+
+                            
+                        }
+                        catch{
+
+                            $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                            $LastExitCode = 1
+                        }
+                        finally{
+                            .{
+                                
+                                if ($toThrow){
+                                    Write-Error $toThrow
+                                }
+                                } | Out-Null
+                                
+                                exit $LastExitCode
+                        }
+
+                    ''')
+
+                }
+                    
+
+
+            }
+        }
+    }
+
+    
+    post {
+        failure {
+            script {
+                println("FAILED")
+
+                if(env.INDEX_FILE){
+                    slackSend(channel: SLACK_RESPONSE.threadId, color: "danger", message: "<!subteam^SOMETHING> Something went wrong, please check the Monthly Report Job - Index. FAILED! :scream:")
+                    SLACK_RESPONSE.addReaction('red_circle')
+                }
+                if(env.USERS_FILE){
+                    slackSend(channel: SLACK_USER_RESPONSE.threadId, color: "danger", message: "<!subteam^SOMETHING> Something went wrong, please check the Monthly Report Job - Security Review. FAILED! :scream:")
+                    SLACK_USER_RESPONSE.addReaction('red_circle')
+                }
+            }            
+        }
+        success {
+            script{
+                println("SUCCESS")   
+
+                if(env.INDEX_FILE){
+                    slackUploadFile (channel: SLACK_RESPONSE.threadId, filePath: "${env.INDEX_FILE}", initialComment:  "Adding file for analysis. <@${env.USER}>")
+                }
+
+                if(env.USERS_FILE){
+                    slackUploadFile (channel: SLACK_USER_RESPONSE.threadId, filePath: "${env.USERS_FILE}", initialComment:  "Adding file for analysis. <!here>")
+                }
+
+                             
+            }            
+        }
+        cleanup {        
+            cleanWs()
+        }
+    }
+}

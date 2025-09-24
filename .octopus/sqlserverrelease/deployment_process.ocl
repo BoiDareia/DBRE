@@ -1,0 +1,481 @@
+step "slack-threaded-notification-initial" {
+    condition = "Always"
+    name = "Slack Threaded Notification - Initial"
+
+    action {
+        is_required = true
+        notes = "Slack thread notification that will be used across the pipeline - Initial Step"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploying #{Octopus.Project.Name} to #{DATABASE} in #{REGION} to #{SELECT_ENVIRONMENT}  Service version: #{BUILD_VERSION}  DB Release: #{RELEASE}."
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "aws-assume-role" {
+    name = "AWS Assume Role"
+    start_trigger = "StartWithPrevious"
+
+    action {
+        is_required = true
+        notes = "Step to assume the necessary role on our AWS infrastructure so we can reach the correct secrets and RDS Instances"
+        properties = {
+            Octopus.Action.Template.Id = "ActionTemplates-64"
+            Octopus.Action.Template.Version = "17"
+            TMP_AWS_REGION = "eu-west-1"
+            TMP_ROLE_ARN = "#{ROLE_ARN}"
+            TMP_SESSION = "#{SESSION}"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "rds-sql-variables-check" {
+    name = "RDS SQL Variables Check"
+
+    action {
+        is_required = true
+        notes = "Step to evaluate and get variables needed to go forward"
+        properties = {
+            $DATABASE = "#{DATABASE}"
+            $REGION = "#{REGION}"
+            $ROLE_ARN = "#{ROLE_ARN}"
+            $SELECT_ENVIRONMENT = "#{SELECT_ENVIRONMENT}"
+            BRANCH_TAG = "#{RELEASE}"
+            Octopus.Action.Template.Id = "ActionTemplates-65"
+            Octopus.Action.Template.Version = "121"
+            STEP_BUILD_VERSION = "#{BUILD_VERSION}"
+            Step.AWS_ACCESS_KEY_ID = "#{Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID}"
+            Step.AWS_SECRET_ACCESS_KEY = "#{Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY}"
+            Step.AWS_SESSION_TOKEN = "#{Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN}"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "slack-threaded-notification-nothing-2-deploy" {
+    condition = "Variable"
+    name = "Slack Threaded Notification - Nothing 2 Deploy"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentCancelled}"
+    }
+
+    action {
+        is_required = true
+        notes = "Slack thread notification that will be used across the pipeline - Simple Step to send a message when a DB does not exist on the specific region or there aren't any DB changes"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentCancelled}"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "prepare-db-deployment" {
+    condition = "Variable"
+    name = "Prepare DB Deployment"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema | Match \"Will do Schema\"}#{/unless}"
+    }
+
+    action {
+        is_required = true
+        notes = "Step that will do the dacpac build and respective migration file to be use by Flyway"
+        properties = {
+            Octopus.Action.Template.Id = "ActionTemplates-102"
+            Octopus.Action.Template.Version = "18"
+            Step.AWS_ACCESS_KEY_ID = "#{Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID}"
+            Step.AWS_SECRET_ACCESS_KEY = "#{Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY}"
+            Step.AWS_SESSION_TOKEN = "#{Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN}"
+            Step.CONFIG_FILE = "#{Octopus.Action[RDS SQL Variables Check].Output.CONFIGFILE}"
+            Step.DATABASE = "#{DATABASE}"
+            Step.DEPLOY_TYPE = "#{Octopus.Action[RDS SQL Variables Check].Output.DEPLOY_TYPE}"
+            Step.ENV = "#{SELECT_ENVIRONMENT}"
+            Step.GIT_PASSWORD = "#{GIT_TOKEN}"
+            Step.GIT_USERNAME = "#{GIT_USER}"
+            Step.OCTOPUS_API_KEY = "#{OCTOPUS_API_KEY}"
+            Step.OCTOPUS_URL = "#{OCTOPUS_URL}"
+            Step.PATH = "#{Octopus.Action[RDS SQL Variables Check].Output.CHECKOUTPATH}"
+            Step.REGION = "#{Octopus.Action[RDS SQL Variables Check].Output.AWSREGION}"
+            Step.SECRET_ID = "#{Octopus.Action[RDS SQL Variables Check].Output.SECRET_ID}"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "slack-threaded-notification-approval" {
+    condition = "Variable"
+    name = "Slack Threaded Notification - Approval"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.Deployment | Match \"Will deploy\"}#{/unless}"
+    }
+
+    action {
+        environments = ["production"]
+        is_required = true
+        notes = "Slack thread notification that will be used across the pipeline - warning to DBA team that PROD approval is waiting"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Need <!subteam^S0237SK1E67> approval for #{Octopus.Project.Name} #{Octopus.Release.Number} to #{Octopus.Environment.Name} for database #{DATABASE} in #{REGION} to #{SELECT_ENVIRONMENT} env. <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|See here>"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "slack-approval-notification" {
+    condition = "Variable"
+    name = "Slack - Approval Notification"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.Deployment | Match \"Will deploy\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        environments = ["production"]
+        notes = "Different step just to send the approval request to the specific DBA channel for centralization"
+        properties = {
+            Channel = "ds-db-jenkins"
+            DeploymentInfoText = "Need <!subteam^S0237SK1E67> approval for #{Octopus.Project.Name} #{Octopus.Release.Number} to #{Octopus.Environment.Name} for database #{DATABASE}. <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|See here>"
+            HookUrl = "#{SlackWebhookDBA}"
+            IconUrl = "https://octopus.com/content/resources/favicon.png"
+            IncludeErrorMessageOnFailure = "false"
+            IncludeFieldEnvironment = "True"
+            IncludeFieldMachine = "false"
+            IncludeFieldRelease = "false"
+            IncludeFieldReleaseNotes = "false"
+            IncludeFieldTenant = "false"
+            IncludeFieldUsername = "false"
+            IncludeLinkOnFailure = "false"
+            Octopus.Action.Template.Id = "ActionTemplates-3"
+            Octopus.Action.Template.Version = "10"
+            OctopusBaseUrl = "#{OCTOPUS_URL}"
+            OctopusUseBundledTooling = "False"
+            Username = "Octopus DB Deploy"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "manual-approval-required" {
+    condition = "Variable"
+    name = "Manual Approval Required"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.Deployment | Match \"Will deploy\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "Octopus.Manual"
+        environments = ["production"]
+        notes = "Prod specific step to approve deploys by the DBA team"
+        properties = {
+            Octopus.Action.Manual.BlockConcurrentDeployments = "True"
+            Octopus.Action.Manual.Instructions = "DBA Approval for PROD deploys"
+            Octopus.Action.Manual.ResponsibleTeamIds = "global/dba"
+            Octopus.Action.RunOnServer = "false"
+        }
+    }
+}
+
+step "flyway-database-migrations-Company" {
+    condition = "Variable"
+    name = "Flyway Database Migrations Company"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema | Match \"Will do Schema\"}#{/unless}"
+    }
+
+    action {
+        notes = "Flyway step to deploy schema changes identified to the database"
+        properties = {
+            Flyway.Additional.Arguments = "-table=\"flyway_schema_history\" -installedBy=#{Octopus.Action[RDS SQL Variables Check].Output.ReleaseHash} -executeInTransaction=#{Octopus.Action[RDS SQL Variables Check].Output.FW_TRAN} "
+            Flyway.Authentication.Method = "usernamepassword"
+            Flyway.Command.BaselineDescription = "Initial Flyway Deployment"
+            Flyway.Command.BaseLineOnMigrate = "true"
+            Flyway.Command.BaselineVersion = "0.0.1"
+            Flyway.Command.FailOnDrift = "true"
+            Flyway.Command.Locations = "#{Octopus.Action[Prepare DB Deployment].Output.Locations}"
+            Flyway.Command.OutOfOrder = "false"
+            Flyway.Command.SkipExecutingMigrations = "false"
+            Flyway.Command.Target = "latest"
+            Flyway.Command.Value = "migrate"
+            Flyway.Database.User = "#{Octopus.Action[RDS SQL Variables Check].Output.User}"
+            Flyway.Database.User.Password = "#{Octopus.Action[RDS SQL Variables Check].Output.Pass}"
+            Flyway.Executable.Path = "C:\\flyway\\latest\\flyway.cmd"
+            Flyway.Target.Url = "#{Octopus.Action[RDS SQL Variables Check].Output.URL}"
+            Octopus.Action.Template.Id = "ActionTemplates-66"
+            Octopus.Action.Template.Version = "25"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "cdc-validation" {
+    condition = "Variable"
+    name = "CDC Validation"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema | Match \"Will do Schema\"}#{/unless}"
+    }
+
+    action {
+        action_type = "Octopus.Script"
+        notes = "Step to replace the CDC validation that's being done in each DB project"
+        properties = {
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                ########################################################################################
+                ##   Check for modified tables that missed the CDC refresh and force it if needed     ##
+                ########################################################################################
+                $ErrorActionPreference = 'Stop'                
+                Set-Location "C:\src\Database-deployment\SQLSchema"
+                
+                . .\DeployDatabaseVersionsOctopus.ps1
+                
+                # The following parameters will have different values, for each job, but will only be set once for each job in Jenkins pipeline. 
+                [string] $secretid = $OctopusParameters["Octopus.Action[RDS SQL Variables Check].Output.SECRET_ID"]
+                [string] $region = $OctopusParameters["Octopus.Action[RDS SQL Variables Check].Output.AWSREGION"]
+                [string] $configFile = $OctopusParameters["Octopus.Action[RDS SQL Variables Check].Output.CONFIGFILE"]
+                [string] $env = $SELECT_ENVIRONMENT
+                
+                $env:AWS_ACCESS_KEY_ID = $OctopusParameters["Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID"]
+                $env:AWS_SECRET_ACCESS_KEY = $OctopusParameters["Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY"]
+                $env:AWS_SESSION_TOKEN = $OctopusParameters["Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN"]
+                
+                $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text)  | ConvertFrom-Json 
+                [string] $username = $secretvalue.username
+                [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+                
+                try{
+                	RefreshCDC $configFile $env $credentials
+                }
+                catch{
+                
+                	$toThrow = ("Refresh CDC step failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                	$LastExitCode = 1                     
+                }
+                finally{
+                
+                	if ($toThrow) {
+                	Write-Error $toThrow
+                	}
+                
+                	exit $LastExitCode
+                }
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "push-migration-into-github" {
+    condition = "Variable"
+    name = "Push Migration into GitHub"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema | Match \"Will do Schema\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "Octopus.Script"
+        properties = {
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                # Set variables
+                $repoPath = "C:\src\Database-deployment"
+                $commitMessage = "Add new SQL release files"
+                $branchName = "master" # Specify the branch you are working on
+                
+                # 1. Navigate to the Git repository
+                try {
+                    Set-Location -Path $repoPath
+                    Write-Host "Successfully navigated to the repository at $repoPath"
+                }
+                catch {
+                    Write-Error "Error: The repository path '$repoPath' was not found."
+                    exit 1
+                }
+                
+                Write-Host "🧹 Cleaning local workspace..."
+                git fetch origin master --quiet
+                if ($LASTEXITCODE -ne 0) { Write-Error "❌ FAILED: Could not fetch from origin."; exit 1; }
+                git merge origin master --quiet
+                if ($LASTEXITCODE -ne 0) { Write-Error "❌ FAILED: 'git merge origin master --quiet' failed."; exit 1; }
+                
+                Write-Host "✅ Local branch is now perfectly in sync with remote."
+                
+                Write-Host "🔍 Checking for new changes to commit..."
+                $gitStatus = git status --porcelain
+                if ([string]::IsNullOrEmpty($gitStatus)) {
+                    Write-Host "✅ No new changes detected. Nothing to commit. Script finished successfully."
+                    exit 0 # Exit with a success code
+                }else{
+                
+                    Write-Host "✅ Final changes detected. Staging, committing, and pushing..."
+                    git add -A
+                    #if ($LASTEXITCODE -ne 0) { Write-Error "Error: Failed to stage changes."; exit 1; }
+                    Write-Host "✅ Staged all changes."
+                
+                    git commit -m "$commitMessage"
+                    #if ($LASTEXITCODE -ne 0) { Write-Error "Error: Failed to commit changes."; exit 1; }
+                    Write-Host "🔄 Committed changes with message: `"$commitMessage`"."
+                
+                    git push --quiet
+                    #if ($LASTEXITCODE -ne 0) { Write-Error "Error: Failed to push changes."; exit 1; }
+                    Write-Host "✅ Successfully pushed changes to the remote repository."
+                }
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "chain-data-deployment-vc" {
+    condition = "Variable"
+    name = "Chain Data Deployment VC"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentData | Match \"Will do Data\"}#{/unless}"
+    }
+
+    action {
+        properties = {
+            Chain_ApiKey = "#{OCTOPUS_API_KEY}"
+            Chain_Channel = "#{DATABASE}"
+            Chain_CreateOption = "True"
+            Chain_DeploySchedule = "WaitForDeployment"
+            Chain_DeployTo = "#{Octopus.Environment.Name}"
+            Chain_ForcePackageDownload = "False"
+            Chain_FormValues = <<-EOT
+                DATABASE = #{DATABASE}
+                RELEASE = #{RELEASE}
+                DEPLOYMENT_TIME = #{DEPLOYMENT_TIME}
+                STATUS = #{STATUS}
+                REGION = #{REGION}
+                BUILD_VERSION = #{BUILD_VERSION}
+                DEPLOY_TYPE = #{Octopus.Action[RDS SQL Variables Check].Output.DEPLOY_TYPE}
+                threadIds = #{Octopus.Action[Slack Threaded Notification - Initial].Output.threadIds}
+                channels = #{Octopus.Action[Slack Threaded Notification - Initial].Output.channels}
+                SCHEMA = #{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema}
+                EOT
+            Chain_GuidedFailure = "Default"
+            Chain_ProjectName = "SQL Server Data Release"
+            Chain_ReleaseNum = "#{BUILD_VERSION | Replace v}-#{DATABASE}-#{REGION}"
+            Chain_SnapshotVariables = "True"
+            Chain_VersionControl = "True"
+            Octopus.Action.Template.Id = "ActionTemplates-215"
+            Octopus.Action.Template.Version = "13"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "call-s3-copy-pipeline-vc" {
+    condition = "Variable"
+    name = "Call S3 Copy Pipeline VC"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[RDS SQL Variables Check].Output.DeploymentSchema | Match \"Will do Schema\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        properties = {
+            Chain_ApiKey = "#{OCTOPUS_API_KEY}"
+            Chain_Channel = "#{DATABASE}"
+            Chain_CreateOption = "True"
+            Chain_DeploySchedule = "NoWait"
+            Chain_DeployTo = "#{Octopus.Environment.Name}"
+            Chain_ForcePackageDownload = "False"
+            Chain_FormValues = <<-EOT
+                S3_Region = eu-west-1
+                Bucket_Name = dba-octopus-migration-files
+                S3_Prefix = #{DATABASE}/#{REGION}/#{SELECT_ENVIRONMENT}/
+                Source_Folder = {Octopus.Action[RDS SQL Variables Check].Output.ScriptsPath}#{SELECT_ENVIRONMENT}
+                S3_Make_Public = False
+                S3_Recursive = False
+                threadIds = #{Octopus.Action[Slack Threaded Notification - Initial].Output.threadIds}
+                channels = #{Octopus.Action[Slack Threaded Notification - Initial].Output.channels}
+                EOT
+            Chain_GuidedFailure = "Default"
+            Chain_ProjectName = "Migration Files to S3 Bucket"
+            Chain_ReleaseNum = "#{Octopus.Release.Number}"
+            Chain_SnapshotVariables = "True"
+            Chain_VersionControl = "True"
+            Octopus.Action.Template.Id = "ActionTemplates-215"
+            Octopus.Action.Template.Version = "13"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "slack-threaded-notification-succeeded" {
+    name = "Slack Threaded Notification - Completed"
+
+    action {
+        is_required = true
+        notes = "Slack thread notification that will be used across the pipeline - In case the pipeline succeeds"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploy Succeeded :tada:"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "slack-threaded-notification-failed" {
+    condition = "Variable"
+    name = "Slack Threaded Notification - Failed"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{Octopus.Deployment.Error}"
+    }
+
+    action {
+        notes = "Slack thread notification that will be used across the pipeline - In case the pipeline fails for some reason"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploy Failed - <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|see status here>"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}

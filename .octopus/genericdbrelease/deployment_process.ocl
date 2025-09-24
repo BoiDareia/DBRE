@@ -1,0 +1,619 @@
+step "slack-threaded-notification-initial" {
+    condition = "Always"
+    name = "Slack Threaded Notification - Initial"
+
+    action {
+        notes = "Slack thread notification that will be used across the pipeline - Initial Step"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploying #{Octopus.Project.Name} to #{DATABASE} to #{SELECT_ENVIRONMENT}  - DB Release: #{RELEASE}."
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "aws-assume-role" {
+    name = "AWS Assume Role"
+    start_trigger = "StartWithPrevious"
+
+    action {
+        notes = "Step to assume the necessary role on our AWS infrastructure so we can reach the correct secrets and RDS Instances"
+        properties = {
+            Octopus.Action.Template.Id = "ActionTemplates-64"
+            Octopus.Action.Template.Version = "17"
+            TMP_AWS_REGION = "us-east-1"
+            TMP_ROLE_ARN = "#{ROLE_ARN}"
+            TMP_SESSION = "#{SESSION}"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "generic-variables-check" {
+    name = "Generic Variables Check"
+
+    action {
+        action_type = "Octopus.Script"
+        notes = "Step to evaluate and get variables needed to go forward"
+        properties = {
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                ####################################################################################################################################
+                # Validate variables that will be used in the deployment script
+                ####################################################################################################################################
+                
+                Set-Location "C:\src\Database-deployment\GenericDB"
+                
+                ## Config file can be generic and dependent only of the database
+                $configFile = 'C:\src\Database-deployment\GenericDB\config\{0}.xml' -f $DATABASE;
+                
+                . .\DeployDatabaseVersionsGenericDBOctopus.ps1
+                . .\FlywayFunctionsGenericDBOctopus.ps1
+                . .\GitFunctionsGenericDBOctopus.ps1
+                
+                ## Get session variables from Assume Role Step
+                $env:AWS_ACCESS_KEY_ID = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID']
+                $env:AWS_SECRET_ACCESS_KEY = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY']
+                $env:AWS_SESSION_TOKEN = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN']
+                
+                
+                ## Get configuration settings for given environment
+                $config = LoadEnvironmentDetails $configFile
+                
+                $result = $false
+                $index = 0
+                $environments = $config.app.environments.environment
+                foreach($environment in $environments){
+                	If($environment.name -match $SELECT_ENVIRONMENT){
+                		$result = $true
+                		break
+                	}
+                    
+                	$index+=1
+                }
+                
+                $appEnv = @($config.app.environments.environment)[$index]
+                
+                [string] $CompanyGitURL = $config.app.global.CompanyGitURL
+                [string] $Engine = $config.app.global.engine
+                [string] $DeployType = $config.app.global.DeployType
+                ## Gets the AWS Secret ID from the config file
+                [string] $secretid = $appEnv.connection.AWSSecretId
+                ## Gets the AWS Region from the config file
+                [string] $region = $config.app.global.AWSRegion
+                ## Create credentials for DB access
+                $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text)   | ConvertFrom-Json 
+                [string] $username = $secretvalue.username
+                [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+                
+                # get data source from config file for Aurora DBs
+                $Driver = $appEnv.connection.odbc
+                $MyServer = $appEnv.connection.url
+                $MyPort = $appEnv.connection.port
+                $MyDB = $appEnv.connection.database
+                $MyUid = $credentials.UserName
+                $MyPass = $credentials.GetNetworkCredential().Password
+                [string] $datasource = "$Driver;Server=$MyServer;Port=$MyPort;Database=$MyDB;Uid=$MyUid;Pwd=$MyPass;"
+                
+                
+                ## Just to normalize the naming used bellow
+                $BRANCH_TAG = $RELEASE
+                
+                ## Gets the checkout pathc from the config file
+                [string] $CheckoutPath = $config.app.global.filePath
+                
+                ## Validate if it's a tag or not and correct the release naming
+                if ($BRANCH_TAG -notmatch '^v\d+\.\d+\.\d+$' -and $BRANCH_TAG -notmatch '^v\d+\.\d+$'){
+                	if ($BRANCH_TAG -match '^[A-Za-z0-9]+/v\d+\.\d+\.\d+'){
+                		$BRANCH_TAG -match 'v\d+\.\d+\.\d+'
+                		$release = $Matches[0]
+                	}else{
+                
+                        if ($BRANCH_TAG -match '^[A-Za-z0-9]+/v\d+\.\d+'){
+                		$BRANCH_TAG -match 'v\d+\.\d+'
+                		$release = $Matches[0]
+                	    }else{
+                
+                            if ($BRANCH_TAG -match '^v\d+\.\d+\.\d+\-[A-Za-z0-9]'){
+                		        $BRANCH_TAG -match 'v\d+\.\d+\.\d+'
+                		        $release = $Matches[0]
+                	        }else{
+                
+                                if ($BRANCH_TAG -match '^v\d+\.\d+\-[A-Za-z0-9]'){
+                		            $BRANCH_TAG -match 'v\d+\.\d+'
+                		            $release = $Matches[0]
+                	            }else{
+                		            ## It ends up here when we are dealing with commit hashs
+                		            $release = $BRANCH_TAG
+                                    Write-Host "Release Hash? $release"
+                                 }
+                            }
+                        }
+                	}
+                }else{
+                	$release = $BRANCH_TAG
+                }
+                
+                Write-Host "Release? $release"
+                Write-Host "Branch/Tag? $BRANCH_TAG"
+                
+                ## Need to check if BRANCH_TAG is 'main' because in that case we do need to git pull
+                if ($BRANCH_TAG -eq 'main'){
+                    	[bool]$IsTag = $false
+                }else{
+                	## Validate if it's a tag or not for v1.0.0 - v1.0 / Or if it's a trunk-base deploy
+                	if ($BRANCH_TAG -match '^\w\d+.\d+.\d+$' -or $BRANCH_TAG -match '^\w\d+\.\d+$' -or $DeployType -eq 'trunkBase'){
+                		[bool]$IsTag = $true
+                	}else{
+                		[bool]$IsTag = $false
+                    }
+                }
+                
+                ## Checkout branch
+                GitCheckoutBranch $CheckoutPath $CompanyGitURL $BRANCH_TAG $IsTag $False
+                
+                ## Validation if there's indeed DB changes to be made ##
+                [String] $Totag = $BRANCH_TAG
+                
+                # Gets the latest tag deployed to PROD
+                [string] $flywayHistoryTable = $config.app.global.schemaHistoryTable
+                $LatestDeployed = LatestVersionDeployed $BRANCH_TAG $datasource $flywayHistoryTable $Engine
+                
+                ## Just to see if it picks up tag or branch
+                Write-Host "Lastest Deploy on DB: $LatestDeployed"
+                
+                ## Parsing to get the correct version in order to avoid redeploy versioning
+                if ($LatestDeployed -match '\d+\.\d+\.\d+'){
+                    $version = $Matches[0]
+                }else{
+                     if ($LatestDeployed -match '\d+\.\d+'){
+                            $version = $Matches[0]
+                     }else{
+                            $version = $LatestDeployed
+                     }    
+                }
+                
+                Write-Host "Matched Version? $version"
+                
+                ## Will do diferently depending on the type of engine being deployed
+                ## If version is '0.0.0' then that's the baseline and we should compare to main
+                if ($version -eq '0.0.0'){
+                    ## We are now enforcing that new DBs have the v0.0.0 tag created so it's no longer necessary to compare to main
+                	#$Fromtag = "main"
+                    $Fromtag = "v$version"
+                }else{
+                    if ($DeployType -eq 'releaseBranch' -and $SELECT_ENVIRONMENT -ne 'PROD'){
+                        $Fromtag = "release/v$version"
+                    }else{
+                        $Fromtag = "v$version"
+                    }
+                }
+                
+                ## Just to see if it picks up tag or branch
+                Write-Host "Deployed in $SELECT_ENVIRONMENT : $Fromtag"
+                
+                [string] $strIsRedeploy = $REDEPLOY
+                [bool] $IsRedeploy = ($strisRedeploy -eq 'True')
+                
+                Write-Host "Checking if it is REDEPLOY: $IsRedeploy"
+                
+                
+                ## Check for Data changes
+                $dif = git diff "$Fromtag..$ToTag" $CheckoutPath | Out-String -Stream | Select-String -Pattern ".sql", "manifest.txt"
+                
+                if ($dif -like "*+++*"){
+                	## Check if manifest file was added
+                	if ($dif -like "*+++*manifest*.**" -and $DeployType -eq 'trunkBase'){
+                		Write-Host "Has Manifest File and It's Trunk base Deployment"
+                		$Deployment = "Will do TBD Deploment!"
+                	}else{
+                    	if ($dif -like "*+++*manifest*.**" -and $DeployType -eq 'releaseBranch'){
+                			Write-Host "Has Manifest File and It's release branch Deployment"
+                        	$Deployment = "Will do Release Branch Deploment!"
+                		}else{
+                        	Write-Host "No Manifest File so It's release branch Deployment"
+                        	$Deployment = "Will do Release Branch Deploment!"
+                        }
+                	}
+                }else{
+                	if ($IsRedeploy -eq $true){
+                		Write-Host "It's a redeploy so It's Trunk base Deployment"
+                		$Deployment = "Will do Release Branch Deploment!"
+                	}else{
+                		Write-Host "Nothing to Deploy, no DB changes found between [ $Fromtag ] and [ $ToTag ]"
+                      	$Deployment = ""
+                      	$DeploymentCancelled = "There are no DB changes to be made at all!"
+                    }
+                }
+                
+                ## Need to check if BRANCH_TAG is TAG in case it's a PROD deploy
+                if ($IsTag -eq $false -and $SELECT_ENVIRONMENT -eq 'PROD'){
+                        $Deployment = ""
+                      	$DeploymentCancelled = "You can't deploy a release branch into PROD, please check if a TAG is created and SET on the DB ticket (Label) and reach out to the DBAs!"
+                        throw "You can't deploy a release branch into PROD, please check if a TAG is created and SET on the DB ticket (Label)!!"
+                }
+                
+                
+                
+                ## Final Octopus variables to be picked up be all other steps.
+                Set-OctopusVariable -name "Deployment" -value $Deployment
+                Set-OctopusVariable -name "DeploymentCancelled" -value $DeploymentCancelled
+                Set-OctopusVariable -name "LastDeployed" -value $Fromtag
+                Set-OctopusVariable -name "IsTag" -value $IsTag
+                Set-OctopusVariable -name "Engine" -value $Engine
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "database-deployment-script" {
+    condition = "Variable"
+    name = "Prepare DB Deployment"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[Generic Variables Check].Output.Deployment| Match \"Will do\"}#{/unless}"
+    }
+
+    action "prepare-db-deployment" {
+        notes = "Step that will use python script to build he migration files to be use by Flyway"
+        properties = {
+            Octopus.Action.Template.Id = "ActionTemplates-207"
+            Octopus.Action.Template.Version = "16"
+            Step.AWS_ACCESS_KEY_ID = "#{Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID}"
+            Step.AWS_SECRET_ACCESS_KEY = "#{Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY}"
+            Step.AWS_SESSION_TOKEN = "#{Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN}"
+            Step.DATABASE = "#{DATABASE}"
+            Step.Deployment = "#{Octopus.Action[Generic Variables Check].Output.Deployment}"
+            Step.ENV = "#{SELECT_ENVIRONMENT}"
+            Step.IsTag = "#{Octopus.Action[Generic Variables Check].Output.IsTag}"
+            Step.OCTOPUS_API_KEY = "#{OCTOPUS_API_KEY}"
+            Step.OCTOPUS_URL = "#{OCTOPUS_URL}"
+            Step.REGION = "#{Octopus.Action[AWS Assume Role].Aws.Region}"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "slack-threaded-notification-awaiting-approval" {
+    condition = "Variable"
+    name = "Slack Threaded Notification - Awaiting approval"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[Generic Variables Check].Output.Deployment| Match \"Will do\"}#{/unless}"
+    }
+
+    action {
+        environments = ["analytics-production"]
+        notes = "Slack thread notification that will be used across the pipeline - warning to DBA team that PROD approval is waiting"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Waiting approval for #{Octopus.Project.Name} #{Octopus.Release.Number} to #{Octopus.Environment.Name} for database #{DATABASE} to #{SELECT_ENVIRONMENT} env. <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|See here>"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "slack-approval-notification" {
+    condition = "Variable"
+    name = "Slack - Approval Notification"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[Generic Variables Check].Output.Deployment| Match \"Will do\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        environments = ["analytics-production"]
+        notes = "Different step just to send the approval request to the specific DBA channel for centralization"
+        properties = {
+            Channel = "ds-db-jenkins"
+            DeploymentInfoText = "Need <!subteam^S0237SK1E67> approval for #{Octopus.Project.Name} #{Octopus.Release.Number} to #{Octopus.Environment.Name} for database #{DATABASE}. <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|See here>"
+            HookUrl = "#{SlackWebhookDBA}"
+            IconUrl = "https://octopus.com/content/resources/favicon.png"
+            IncludeErrorMessageOnFailure = "false"
+            IncludeFieldEnvironment = "True"
+            IncludeFieldMachine = "false"
+            IncludeFieldRelease = "false"
+            IncludeFieldReleaseNotes = "false"
+            IncludeFieldTenant = "false"
+            IncludeFieldUsername = "false"
+            IncludeLinkOnFailure = "false"
+            Octopus.Action.Template.Id = "ActionTemplates-3"
+            Octopus.Action.Template.Version = "10"
+            OctopusBaseUrl = "#{OCTOPUS_URL}"
+            Username = "Octopus DB Deploy"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "manual-approval-required" {
+    condition = "Variable"
+    name = "Manual Approval Required"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[Generic Variables Check].Output.Deployment| Match \"Will do\"}#{/unless}"
+    }
+    start_trigger = "StartWithPrevious"
+
+    action {
+        action_type = "Octopus.Manual"
+        environments = ["analytics-production"]
+        notes = "Prod specific step to approve deploys by the DBA team"
+        properties = {
+            Octopus.Action.Manual.BlockConcurrentDeployments = "True"
+            Octopus.Action.Manual.Instructions = "^DBA Approval for STG and PROD deploys"
+            Octopus.Action.Manual.ResponsibleTeamIds = "global/dba"
+            Octopus.Action.RunOnServer = "false"
+        }
+    }
+}
+
+step "flyway-database-migrations-Company" {
+    condition = "Variable"
+    name = "Flyway Database Migrations Company"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{unless Octopus.Deployment.Error}#{Octopus.Action[Generic Variables Check].Output.Deployment| Match \"Will do\"}#{/unless}"
+    }
+
+    action {
+        notes = "Flyway step to deploy schema changes identified to the database"
+        properties = {
+            Flyway.Additional.Arguments = "-table=\"flyway_schema_history\" -executeInTransaction=#{Octopus.Action[Prepare DB Deployment].Output.FW_TRAN} "
+            Flyway.Authentication.Method = "usernamepassword"
+            Flyway.Command.BaselineDescription = "Initial Flyway Deployment"
+            Flyway.Command.BaseLineOnMigrate = "true"
+            Flyway.Command.BaselineVersion = "#{Octopus.Action[Prepare DB Deployment].Output.Baseline}"
+            Flyway.Command.FailOnDrift = "true"
+            Flyway.Command.Locations = "#{Octopus.Action[Prepare DB Deployment].Output.Locations}"
+            Flyway.Command.OutOfOrder = "#{Octopus.Action[Prepare DB Deployment].Output.OUTOFORDER}"
+            Flyway.Command.SkipExecutingMigrations = "false"
+            Flyway.Command.Target = "latest"
+            Flyway.Command.Value = "migrate"
+            Flyway.Database.User = "#{Octopus.Action[Prepare DB Deployment].Output.User}"
+            Flyway.Database.User.Password = "#{Octopus.Action[Prepare DB Deployment].Output.Password}"
+            Flyway.Executable.Path = "C:\\flyway\\latest\\flyway.cmd"
+            Flyway.Target.Url = "#{Octopus.Action[Prepare DB Deployment].Output.URL}"
+            Octopus.Action.Template.Id = "ActionTemplates-66"
+            Octopus.Action.Template.Version = "25"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "cleanup-on-error" {
+    condition = "Failure"
+    name = "Cleanup on Flyway Error"
+
+    action {
+        action_type = "Octopus.Script"
+        properties = {
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                ####################################################################################################################################
+                # Validate variables that will be used in the deployment script
+                ####################################################################################################################################
+                
+                Set-Location "C:\src\Database-deployment\GenericDB"
+                
+                ## Config file can be generic and dependent only of the database
+                $configFile = 'C:\src\Database-deployment\GenericDB\config\{0}.xml' -f $DATABASE;
+                
+                . .\DeployDatabaseVersionsGenericDBOctopus.ps1
+                . .\FlywayFunctionsGenericDBOctopus.ps1
+                . .\GitFunctionsGenericDBOctopus.ps1
+                
+                ## Get session variables from Assume Role Step
+                $env:AWS_ACCESS_KEY_ID = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_ACCESS_KEY_ID']
+                $env:AWS_SECRET_ACCESS_KEY = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_SECRET_ACCESS_KEY']
+                $env:AWS_SESSION_TOKEN = $OctopusParameters['Octopus.Action[AWS Assume Role].Output.AWS_SESSION_TOKEN']
+                
+                
+                ## Get configuration settings for given environment
+                $config = LoadEnvironmentDetails $configFile
+                
+                $result = $false
+                $index = 0
+                $environments = $config.app.environments.environment
+                foreach($environment in $environments){
+                	If($environment.name -match $SELECT_ENVIRONMENT){
+                		$result = $true
+                		break
+                	}
+                    
+                	$index+=1
+                }
+                
+                $appEnv = @($config.app.environments.environment)[$index]
+                
+                [string] $CompanyGitURL = $config.app.global.CompanyGitURL
+                [string] $Engine = $config.app.global.engine
+                [string] $DEPLOY_TYPE = $config.app.global.DeployType
+                ## Gets the AWS Secret ID from the config file
+                [string] $secretid = $appEnv.connection.AWSSecretId
+                ## Gets the AWS Region from the config file
+                [string] $region = $config.app.global.AWSRegion
+                ## Create credentials for DB access
+                $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text)   | ConvertFrom-Json 
+                [string] $username = $secretvalue.username
+                [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+                
+                # get folder where the scripts are stored
+                [string] $RootScriptsPath = $config.app.global.RootScriptsPath
+                [string] $ScriptsPath = $RootScriptsPath + $SELECT_ENVIRONMENT + '\'
+                
+                # get data source from config file for Aurora DBs
+                $Driver = $appEnv.connection.odbc
+                $MyServer = $appEnv.connection.url
+                $MyPort = $appEnv.connection.port
+                $MyDB = $appEnv.connection.database
+                $MyUid = $credentials.UserName
+                $MyPass = $credentials.GetNetworkCredential().Password
+                [string] $datasource = "$Driver;Server=$MyServer;Port=$MyPort;Database=$MyDB;Uid=$MyUid;Pwd=$MyPass;"
+                
+                
+                ## Just to normalize the naming used bellow
+                $BRANCH_TAG = $RELEASE
+                
+                ## Gets the checkout pathc from the config file
+                [string] $CheckoutPath = $config.app.global.filePath
+                
+                # Gets the latest tag deployed to PROD
+                [string] $flywayHistoryTable = $config.app.global.schemaHistoryTable
+                $LatestDeployed = LatestVersionDeployed $BRANCH_TAG $datasource $flywayHistoryTable $Engine
+                
+                ## Just to see if it picks up tag or branch
+                Write-Host "Lastest Deploy on DB: $LatestDeployed"
+                
+                ## Parsing to get the correct version in order to avoid redeploy versioning
+                if ($LatestDeployed -match '\d+\.\d+\.\d+'){
+                    $version = $Matches[0]
+                }else{
+                     if ($LatestDeployed -match '\d+\.\d+'){
+                            $version = $Matches[0]
+                     }else{
+                            $version = $LatestDeployed
+                     }    
+                }
+                
+                try {
+                    if ($BRANCH_TAG.Contains($version)){
+                    
+                        Write-Host "Matched Version? $version"
+                        Write-Host "Matched Branch/Tag? $BRANCH_TAG"
+                
+                        ## This will check the if it's redeploy to know which files to delete
+                        if ($REDEPLOY -eq 'True'){
+                            $current = "R"
+                        }else {
+                            $current = "V"
+                        }
+                
+                        Write-Host "Redeploy? $current"
+                
+                        ## Clean the database from this version because we had an error
+                        CleanDatabase $version $datasource $flywayHistoryTable $Engine $REDEPLOY
+                    
+                        ## Clean the created files in the machine refering to the failed deployment
+                        CleanFiles $version $ScriptsPath $current 
+                    
+                    }else {
+                        Write-Host "NOT Matched Version? $version"
+                        Write-Host "NOT Matched Branch/Tag? $BRANCH_TAG"
+                    
+                        Write-Host "No clean up needed because no deploy was actually made!"
+                    }
+                
+                } catch {
+                    Write-Host "An error occurred while deleting data:"
+                    Write-Host $_.Exception.Message
+                    throw
+                    exit 1
+                } finally {
+                    # Code that always executes, regardless of exceptions
+                    Write-Host "The delete operation is complete."
+                }
+                
+                
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "call-s3-copy-pipeline-vc" {
+    name = "Call S3 Copy Pipeline VC"
+
+    action {
+        properties = {
+            Chain_ApiKey = "#{OCTOPUS_API_KEY}"
+            Chain_Channel = "#{DATABASE}"
+            Chain_CreateOption = "True"
+            Chain_DeploySchedule = "NoWait"
+            Chain_DeployTo = "#{Octopus.Environment.Name}"
+            Chain_ForcePackageDownload = "False"
+            Chain_FormValues = <<-EOT
+                S3_Region = eu-west-1
+                Bucket_Name = dba-octopus-migration-files
+                S3_Prefix = #{DATABASE}/#{Octopus.Action[Prepare DB Deployment].Output.ENVIRONMENT}/
+                Source_Folder = C:\src\Database-deployment\GenericDB\SQL\Release\#{DATABASE}\#{Octopus.Action[Prepare DB Deployment].Output.ENVIRONMENT}
+                S3_Make_Public = False
+                S3_Recursive = False
+                threadIds = #{Octopus.Action[Slack Threaded Notification - Initial].Output.threadIds}
+                channels = #{Octopus.Action[Slack Threaded Notification - Initial].Output.channels}
+                EOT
+            Chain_GuidedFailure = "Default"
+            Chain_ProjectName = "Generic Migration Files to S3 Bucket"
+            Chain_ReleaseNum = "#{Octopus.Release.Number}"
+            Chain_SnapshotVariables = "True"
+            Chain_VersionControl = "True"
+            Octopus.Action.Template.Id = "ActionTemplates-215"
+            Octopus.Action.Template.Version = "13"
+        }
+        worker_pool_variable = "DB Worker"
+    }
+}
+
+step "slack-threaded-notification-deployment-status" {
+    name = "Slack Threaded Notification - Completed"
+
+    action "slack-threaded-notification-succeeded" {
+        notes = "Slack thread notification that will be used across the pipeline - In case the pipeline succeeds"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploy Succeeded :tada:"
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}
+
+step "slack-threaded-notification-failed" {
+    condition = "Variable"
+    name = "Slack Threaded Notification - Failed"
+    properties = {
+        Octopus.Step.ConditionVariableExpression = "#{Octopus.Deployment.Error}"
+    }
+
+    action {
+        notes = "Slack thread notification that will be used across the pipeline - In case the pipeline fails for some reason"
+        properties = {
+            channels = "#{slack.channel}"
+            message = "Deploy Failed - <#{Octopus.Web.BaseUrl}#{Octopus.Web.DeploymentLink}|See status here> "
+            Octopus.Action.Template.Id = "ActionTemplates-30"
+            Octopus.Action.Template.Version = "64"
+        }
+        worker_pool = "k8s-workers"
+
+        container {
+            feed = "aws-ecr-transit"
+            image = "octopus-custom-images:latest"
+        }
+    }
+}

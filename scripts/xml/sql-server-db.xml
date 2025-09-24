@@ -1,0 +1,90 @@
+<app>
+    <name>Database-Name</name>
+    <global>
+        <debugEnabled>false</debugEnabled>
+        <schemaHistoryTable>flyway_schema_history</schemaHistoryTable>
+        <installedBy>admin</installedBy>
+        <dacpac>C:\src\Database-Name\DB\bin\Debug\Database-Name.DB.dacpac</dacpac>
+        <dacfxPath>C:\Program Files\Microsoft SQL Server\160\DAC\bin\Microsoft.SqlServer.Dac.dll</dacfxPath>
+        <!-- Checkout Path for each service -->
+        <CheckoutPath>C:\src\Database-Name</CheckoutPath>
+		<DBPath>Database-Name\DB</DBPath>
+        <DataPath>Database-Name\DB\data</DataPath>
+        <RootScriptsPath>C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\US\</RootScriptsPath>
+        <CompanyGitURL>https://github.com/Database-Name.git</CompanyGitURL>
+        <flywayCmdPath>C:\flyway\latest\</flywayCmdPath>
+        <!-- Baseline for all new projects should be 0.0.0 -->
+        <baseline>1.0.0</baseline>
+        <solution>C:\src\Database-Name\Database-Name.sln</solution>
+        <project>C:\src\Database-Name\DB\Database-Name.DB.sqlproj</project>
+        <transaction>true</transaction>
+        <!-- AWS Region Options: US - us-east-1, EU - eu-west-1 -->
+        <AWSRegion>us-east-1</AWSRegion>
+        <!-- DeployType Options: releaseBranch, trunkBase -->
+        <DeployType>trunkBase</DeployType>
+    </global>
+    <environments>
+        <environment>
+            <name>dev</name>
+            <description>Development Database</description>
+            <connection>
+                <url>jdbc:sqlserver://database-url.com:1433;databaseName=database-name</url>
+                <user>admin</user>
+                <password></password>
+                <!-- AWS Secret by Environment -->
+                <AWSSecretId>aws-secret-dev</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\US\dev</location>
+            </locations>
+            <allowClean>false</allowClean>
+            <publishXml>C:\src\Database-Name\DB\Database-Name.DB.devqa.us.publish.xml</publishXml>
+        </environment>
+        <environment>
+            <name>qa</name>
+            <description>qa Database</description>
+            <connection>
+                <url>jdbc:sqlserver://database-url.com:1433;databaseName=database-name</url>
+                <user>admin</user>
+                <password></password>
+            </connection>
+            <locations>
+                <location>filesystem:C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\US\qa</location>
+            </locations>
+            <allowClean>false</allowClean>
+            <publishXml>C:\src\Database-Name\Database-Name\DB\Database-Name.DB.qa.us.publish.xml</publishXml>
+        </environment>
+        <environment>
+            <name>stg</name>
+            <description>Staging Database</description>
+            <connection>
+                <url>jdbc:sqlserver://database-url.com:1433;databaseName=database-name</url>
+                <user>admin</user>
+                <password></password>
+                <!-- AWS Secret by Environment -->
+                <AWSSecretId>aws-secret-stg</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\US\stg</location>
+            </locations>
+            <allowClean>false</allowClean>
+            <publishXml>C:\src\Database-Name\DB\Database-Name.DB.staging.us.publish.xml</publishXml>
+        </environment>
+        <environment>
+            <name>prod</name>
+            <description>Production Database</description>
+            <connection>
+                <url>jdbc:sqlserver://database-url.com:1433;databaseName=database-name</url>
+                <user>admin</user>
+                <password></password>
+                <!-- AWS Secret by Environment -->
+                <AWSSecretId>aws-secret-prod</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\US\prod</location>
+            </locations>
+            <allowClean>false</allowClean>
+            <publishXml>C:\src\Database-Name\DB\Database-Name.DB.production.us.publish.xml</publishXml>
+        </environment>
+    </environments>
+</app>

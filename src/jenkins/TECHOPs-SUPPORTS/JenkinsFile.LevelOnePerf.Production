@@ -1,0 +1,435 @@
+#!/usr/bin/groovy
+import groovy.json.JsonOutput
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+Void assumeRoleSQLServer(targetenv) {
+    TARGETENV = "${targetenv.name}"
+    SESSION = "${targetenv.session}"
+    FILE = "${env.WORKSPACE}\\assumeroleSQLServer.txt"
+    
+    // Unset AWS Environment Variables to skip between accounts
+    env.AWS_ACCESS_KEY_ID = ""
+    env.AWS_SECRET_ACCESS_KEY = ""
+    env.AWS_SESSION_TOKEN = ""
+    
+    
+    println "Assume Role in ${TARGETENV} Account from the file ${FILE}"
+    bat(returnStdout:true, script: "aws sts assume-role --role-arn ${TARGETENV} --role-session-name ${SESSION} > ${FILE}")
+    
+    def props = readJSON file: "${FILE}"
+
+    AWS_ACCESS_KEY_ID = props['Credentials']['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = props['Credentials']['SecretAccessKey']
+    AWS_SESSION_TOKEN = props['Credentials']['SessionToken']
+
+    env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+    env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+    env.AWS_SESSION_TOKEN = AWS_SESSION_TOKEN
+
+    println(env.AWS_ACCESS_KEY_ID)
+    println(env.AWS_SECRET_ACCESS_KEY)
+    println(env.AWS_SESSION_TOKEN)
+
+    bat(returnStdout:true, script: "aws sts get-caller-identity --output text --query Account")
+}
+
+pipeline {
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+        timeout (time: 50, unit: 'MINUTES')
+    } 
+    
+environment {
+        SUPPORT_GROUP = 'dba@company.com'
+        SETCMDOFF = bat(returnStdout:true, script: '@echo off')
+        AWS_ACC_ID = bat(script: '@echo off && aws sts get-caller-identity --output text --query "Account"', returnStdout: true).trim()
+        STG = '055566514766'
+    }
+
+parameters {
+    booleanParam (name: 'US_performance_report_MainPlatform',
+             description: "Select To Generate US Based Report",
+               defaultValue: false)
+    booleanParam (name: 'EU_performance_report_MainPlatform',
+             description: "Select To Generate EU Based Report",
+               defaultValue: false)
+    choice(name: 'Select_Number_Of_Hours',
+    description: "Choose how many hours you want the report for. Max is 3 hours. i.e. Previous 3 hours",
+    choices: '1\n2\n3'
+    )
+}
+
+agent {
+        node {
+            label "Jenkins-DB"
+        }
+    }
+    
+stages {
+    stage('ASSUME ROLE - PROD') {
+        steps{
+            script{
+                
+                println "AWS account used is: ${AWS_ACC_ID}"
+                
+				ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+				
+				assumeRoleSQLServer([name: "${ROLE_ARN}", session: "sqlserver-pipeline"])
+				
+				println '''Assumed Role For Account: company_apps_prod'''
+            }
+        }
+    }
+    stage('STARTING NOTIFICATION THREAD') {
+        steps{
+            script{
+                
+                println "Starting Notification Thread In Slack."
+                
+                 SLACK_RESPONSE = (slackSend(channel: "dba-alerts", color: "good",username: "Performance Reports", message: "Level 1 Performance Report Started. This may take a few minutes."))
+				
+            }
+        }
+    }
+    stage('CREATE-DOWNLOAD FILES - US'){
+        when {
+                expression { params.US_performance_report_MainPlatform == true }
+        }
+        steps{
+            script{
+                powershell(returnStdout: true, script: ''' 
+                
+                $ErrorActionPreference = 'Stop'
+				
+				[string]$toThrow = [string]::Empty
+				$LastExitCode = 0
+				
+                ##############
+                #SESSION INFO#
+                ##############
+
+                $accessKey = $env:AWS_ACCESS_KEY_ID
+                $secretKey = $env:AWS_SECRET_ACCESS_KEY
+                $sessionToken = $env:AWS_SESSION_TOKEN
+                
+				#####################################################################
+				#REGION & BUCKET NAMES SHOULD BE ORDERED BY REGION IN THE SAME ORDER#
+                #Outer most loop, loops through region & bucket                     #
+				#This is so we don't have to repeat code                            #
+                #####################################################################
+                $Region = @('us-east-1')
+                $bucket = @('dba-us-kpi-metrics')
+                [string] $hours = $env:Select_Number_Of_Hours
+                
+				
+				#Local folder where files should be downloaded to - downloading to workspace so we don't have to manage retention
+				[string]$local_folder = $env:WORKSPACE + "\\"
+
+                #Empty array to hold all of the file names
+                $file_list = @()
+				#######################################################
+				# 1 array is used to hold file names from both regions#
+				# The second iteration of the outer loop will increase#
+				# the starting point for the download.                #
+				#######################################################
+				$file_list_control = 0
+
+
+                #######################################################
+                # TO ADD NEW/REMOVE A FUNCTION:                       #         
+				# Add/Remove function name to the following array	  #		  
+				#######################################################
+                # PLEASE VIEW NOTE ON FUNCTION PAYLOAD IN BELOW LOOP  #
+                #######################################################
+                $function_list = @('LoadTechOpsReport','LeadBlockerTechOpsReport')
+				
+				try{
+					for($j=0;$j -lt $bucket.Length;$j++)
+					{
+
+
+
+						#Looping through the list to invoke all functions and generate a list of created files
+						for($i=0;$i -lt $function_list.Length;$i++)
+						{
+                            #######################################################
+                            # THIS PAYLOAD IS PASSED TO ALL FUNCTIONS             #
+                            # THIS IS HARMLESS IF LAMBDA DOESN'T USE THE VALUES   #
+                            # IF LAMBDA NEEDS A PAYLOAD PASSED INCLUDE IT BUT WITH#
+                            # A DIFFERENT KEY VALUE                               #
+                            #######################################################
+
+                            $function_payload = '{ "hours_diff":'+$hours+' }'
+
+							Write-Host "Invoking Function: " $function_list[$i] 
+							$Result = Invoke-LMFunction -FunctionName $function_list[$i] -Region $Region[$j] -payload $function_payload -AccessKey $accessKey -SecretKey $secretKey -SessionToken $sessionToken
+							#Getting output of the function - Should put in some validation to confirm it was successful (status = 200 check should do it)
+							$StreamReader = [System.IO.StreamReader]::new($Result.Payload)
+							$payload = $StreamReader.ReadToEnd()
+							
+							$payload | set-content jsonfile.json
+							
+							$JSON = (Get-Content "jsonfile.json" -Raw) |Out-String | ConvertFrom-Json
+							#Getting each filename from the lambda results
+							foreach( $file in $JSON.body )
+							{
+								write-host $file.FileName
+								#Only adding valid file names to the list. If Empty is the filename then no files where created by lambda
+								if($file.FileName -ne 'Empty')
+								{
+								   $file_list += $file.FileName
+                                   Write-Host "Adding File $file.FileName to the download list."
+								}
+							}
+			
+						}
+						
+						#If the list has no records then no files where created
+						if($file_list.count -gt 0)
+						{
+							#There are files to download - do download in here
+							Write-Host "Number of Files To Download: " $file_list.count
+							write-host "BEFORE LOOP Control: $file_list_control"
+							#Loop to prepare & execute download of each file.
+							for($k=$file_list_control;$k -lt $file_list.Length;$k++)
+							{
+								
+								Write-Host "File To Parse: " $file_list[$k]
+								$lastSlashPosition = $file_list[$k].LastIndexOf('/')
+								$localFile = $file_list[$k].Substring($lastSlashPosition + 1)
+								$fullPath = $local_folder + $localFile
+								Write-Host "Downloading File To: $fullPath"
+									
+								Read-S3Object -BucketName $bucket[$j] -Key $file_list[$k] -File $fullPath -Region $Region[$j] -SecretKey $secretKey -AccessKey $accessKey -SessionToken $sessionToken;
+									
+							
+							}
+							
+							$file_list_control = $k
+							write-host "K: $k  Control: $file_list_control"
+							
+						}
+						else
+						{
+							#There are NO FILES to download - Report this and do nothing else.
+							Write-Host "Number of Files To Download: " $file_list.count
+							Write-Host "Taking No Further Action In This Account & Region"
+						}
+						
+						
+					}
+                }
+				catch {
+                    $tothrow = ("Failed to Create & DownloadUS Performance Files: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                    $LastExitCode = 1
+                }
+				finally{
+                    if ($toThrow) {
+                        Write-Error $toThrow
+                    }
+                    exit $LastExitCode
+                }
+				
+                ''')
+            }
+        }
+    }
+    stage('CREATE-DOWNLOAD FILES - EU'){
+        when {
+                expression { params.EU_performance_report_MainPlatform == true }
+        }
+        steps{
+            script{
+                powershell(returnStdout: true, script: ''' 
+                
+                $ErrorActionPreference = 'Stop'
+				
+				[string]$toThrow = [string]::Empty
+				$LastExitCode = 0
+				
+                ##############
+                #SESSION INFO#
+                ##############
+
+                $accessKey = $env:AWS_ACCESS_KEY_ID
+                $secretKey = $env:AWS_SECRET_ACCESS_KEY
+                $sessionToken = $env:AWS_SESSION_TOKEN
+                
+				#####################################################################
+				#REGION & BUCKET NAMES SHOULD BE ORDERED BY REGION IN THE SAME ORDER#
+                #Outer most loop, loops through region & bucket                     #
+				#This is so we don't have to repeat code                            #
+                #####################################################################
+                $Region = @('eu-west-1')
+                $bucket = @('dba-eu-kpi-metrics')
+                [string] $hours = $env:Select_Number_Of_Hours
+                
+				
+				#Local folder where files should be downloaded to - Downloading to workspace so we don't have to manage retention
+				[string]$local_folder = $env:WORKSPACE + "\\"
+
+                #Empty array to hold all of the file names
+                $file_list = @()
+				#######################################################
+				# 1 array is used to hold file names from both regions#
+				# The second iteration of the outer loop will increase#
+				# the starting point for the download.                #
+				#######################################################
+				$file_list_control = 0
+
+
+                #######################################################
+                # TO ADD NEW/REMOVE A FUNCTION:                       #         
+				# Add/Remove function name to the following array	  #		  
+				#######################################################
+                # PLEASE VIEW NOTE ON FUNCTION PAYLOAD IN BELOW LOOP  #
+                #######################################################
+
+                $function_list = @('LoadTechOpsReport','LeadBlockerTechOpsReport')
+				
+				try{
+					for($j=0;$j -lt $bucket.Length;$j++)
+					{
+
+
+
+						#Looping through the list to invoke all functions and generate a list of created files
+						for($i=0;$i -lt $function_list.Length;$i++)
+						{
+                            #######################################################
+                            # THIS PAYLOAD IS PASSED TO ALL FUNCTIONS             #
+                            # THIS IS HARMLESS IF LAMBDA DOESN'T USE THE VALUES   #
+                            # IF LAMBDA NEEDS A PAYLOAD PASSED INCLUDE IT BUT WITH#
+                            # A DIFFERENT KEY VALUE                               #
+                            #######################################################
+
+                            $function_payload = '{ "hours_diff":'+$hours+' }'
+
+							Write-Host "Invoking Function: " $function_list[$i] 
+							$Result = Invoke-LMFunction -FunctionName $function_list[$i] -Region $Region[$j] -payload $function_payload -AccessKey $accessKey -SecretKey $secretKey -SessionToken $sessionToken
+							#Getting output of the function - Should put in some validation to confirm it was successful (status = 200 check should do it)
+							$StreamReader = [System.IO.StreamReader]::new($Result.Payload)
+							$payload = $StreamReader.ReadToEnd()
+							
+							$payload | set-content jsonfile.json
+							
+							$JSON = (Get-Content "jsonfile.json" -Raw) |Out-String | ConvertFrom-Json
+							#Getting each filename from the lambda results
+							foreach( $file in $JSON.body )
+							{
+								write-host $file.FileName
+								#Only adding valid file names to the list. If Empty is the filename then no files where created by lambda
+								if($file.FileName -ne 'Empty')
+								{
+								   $file_list += $file.FileName
+                                   Write-Host "Adding File $file.FileName to the download list."
+								}
+							}
+			
+						}
+						
+						#If the list has no records then no files where created
+						if($file_list.count -gt 0)
+						{
+							#There are files to download - do download in here
+							Write-Host "Number of Files To Download: " $file_list.count
+							write-host "BEFORE LOOP Control: $file_list_control"
+							#Loop to prepare & execute download of each file.
+							for($k=$file_list_control;$k -lt $file_list.Length;$k++)
+							{
+								
+								Write-Host "File To Parse: " $file_list[$k]
+								$lastSlashPosition = $file_list[$k].LastIndexOf('/')
+								$localFile = $file_list[$k].Substring($lastSlashPosition + 1)
+								$fullPath = $local_folder + $localFile
+								Write-Host "Downloading File To: $fullPath"
+									
+								Read-S3Object -BucketName $bucket[$j] -Key $file_list[$k] -File $fullPath -Region $Region[$j] -SecretKey $secretKey -AccessKey $accessKey -SessionToken $sessionToken;
+
+                            
+							
+							}
+							
+							$file_list_control = $k
+							write-host "K: $k  Control: $file_list_control"
+							
+						}
+						else
+						{
+							#There are NO FILES to download - Report this and do nothing else.
+							Write-Host "Number of Files To Download: " $file_list.count
+							Write-Host "Taking No Further Action In This Account & Region"
+						}
+						
+						
+					}
+                }
+				catch {
+                    $tothrow = ("Failed to Create & DownloadUS Performance Files: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                    $LastExitCode = 1
+                }
+				finally{
+                    if ($toThrow) {
+                        Write-Error $toThrow
+                    }
+                    exit $LastExitCode
+                }
+				
+                ''')
+            }
+        }
+    }
+    stage('SEND REPORTS'){
+        steps{
+            script{
+
+                def files = findFiles(glob: '**/*.csv')
+
+                for(int i =0; i < files.length; i++){
+                    slackUploadFile (channel: SLACK_RESPONSE.threadId, filePath: "${files[i].name}", initialComment:  "Adding file for analysis.")
+
+                }
+
+
+            }
+        }
+    }
+}
+
+post {
+	failure {
+		script{
+
+            def files = findFiles(glob: '**/*.csv')
+
+                for(int i =0; i < files.length; i++){
+                    slackUploadFile (channel: SLACK_RESPONSE.threadId, filePath: "${files[i].name}", initialComment:  "Adding file for analysis.")
+
+                }
+
+			slackSend(channel: SLACK_RESPONSE.threadId, color: "danger", message: "Part Of The Level 1 Performance Report Has FAILED. Please Investigate :scream: <!subteam^S0237SK1E67>")
+			SLACK_RESPONSE.addReaction('red_circle')
+							
+							
+		}
+
+	}
+	success {
+		script{
+			slackSend(channel: SLACK_RESPONSE.threadId, color: "good", message: "Level 1 Performance Report Completed  :tada:")
+			SLACK_RESPONSE.addReaction('large_green_circle')
+							
+		}
+	}
+	cleanup {        
+		cleanWs(
+			deleteDirs: true,
+			notFailBuild: true,
+		)
+	}
+} 	
+
+}
+    
+    

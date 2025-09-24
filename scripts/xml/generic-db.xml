@@ -1,0 +1,88 @@
+<app>
+    <name>Database-Name</name>
+	<global>
+		<debugEnabled>false</debugEnabled>
+		<schemaHistoryTable>flyway_schema_history</schemaHistoryTable>
+		<installedBy>admin</installedBy>
+		<buildFile>NotUsed</buildFile>
+		<filePath>C:\src\Database-Name\db\</filePath>
+        <deployPath>migrationFiles</deployPath>
+		<RootScriptsPath>C:\src\Database-deployment\GenericDB\SQL\Release\Database-Name\</RootScriptsPath>
+		<CompanyGitURL>https://github.com/Database-Name.git</CompanyGitURL>
+		<flywayCmdPath>C:\flyway\latest\</flywayCmdPath>
+        <!-- Baseline for all new projects should be 0.0.0 -->
+		<baseline>0.0.0</baseline>
+		<pythonPath>C:\Program Files (x86)\Microsoft Visual Studio\Shared\Python37_64</pythonPath>
+        <!-- Engine Options: auroraPostgres, auroraMySQL, redshift -->
+        <engine>redshift</engine>
+        <OutOfOrder>false</OutOfOrder>
+        <AWSRegion>us-east-1</AWSRegion>
+        <!-- DeployType Options: releaseBranch, trunkBase -->
+        <DeployType>trunkBase</DeployType>
+        <transaction>true</transaction>
+        <!-- DbType Options: postgresql, mysql, redshift -->
+        <DbType>redshift</DbType>
+	</global>
+    <environments>
+        <environment>
+            <name>dev</name>
+            <description>Development Database</description>
+            <connection>
+                <url>database-url.com</url>
+                <port>5439</port>
+                <database>Database-Name</database>
+				<odbc>Driver={Amazon Redshift (x64)}</odbc>
+                <AWSSecretId>dev-secret</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:/src/Database-deployment/GenericDB/SQL/Release/Database-Name/dev</location>
+            </locations>
+            <allowClean>true</allowClean>
+        </environment>
+        <environment>
+            <name>train</name>
+            <description>Train Database</description>
+            <connection>
+                <url>database-url.com</url>
+                <port>5439</port>
+                <database>Database-Name</database>
+				<odbc>Driver={Amazon Redshift (x64)}</odbc>
+                <AWSSecretId>dev-secret</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:/src/Database-deployment/GenericDB/SQL/Release/Database-Name/train</location>
+            </locations>
+            <allowClean>true</allowClean>
+        </environment>
+        <environment>
+            <name>stg</name>
+            <description>Staging Database</description>
+            <connection>
+                <url>database-url.com</url>
+                <port>5439</port>
+                <database>Database-Name</database>
+				<odbc>Driver={Amazon Redshift (x64)}</odbc>
+                <AWSSecretId>stg-secret</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:/src/Database-deployment/GenericDB/SQL/Release/Database-Name/staging</location>
+            </locations>
+            <allowClean>false</allowClean>
+        </environment>
+        <environment>
+            <name>prod</name>
+            <description>Production Database</description>
+            <connection>
+                <url>database-url.com</url>
+                <port>5439</port>
+                <database>Database-Name</database>
+				<odbc>Driver={Amazon Redshift (x64)}</odbc>
+                <AWSSecretId>prod-secret</AWSSecretId>
+            </connection>
+            <locations>
+                <location>filesystem:C:/src/Database-deployment/GenericDB/SQL/Release/Database-Name/production</location>
+            </locations>
+            <allowClean>false</allowClean>
+        </environment>
+    </environments>
+</app>

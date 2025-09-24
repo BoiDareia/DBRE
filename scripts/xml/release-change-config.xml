@@ -1,0 +1,25 @@
+<app>
+	<databases>
+		<database>
+			<CompanyGitURL name= "Database-Name">https://github.com/Database-Name.git</CompanyGitURL>
+			<CompanyGitDirectory name= "Database-Name">Database-Name\TestDb\data\</CompanyGitDirectory>
+			<CompanyDeployDirectory name= "Database-Name">C:\src\Database-deployment\SQLSchema\SQL\Release\Database-Name\REGION\ENV</CompanyDeployDirectory>
+		</database>
+	</databases>
+	<environments>
+		<environment name= "dev" database ="Database-Name" region="US">database-url.com</environment>
+		<environment name= "qa" database ="Database-Name" region="US">database-url.com</environment>
+		<environment name= "qa" database ="Database-Name" region="EU">database-url.com</environment>	
+		<environment name= "stg" database ="Database-Name" region="US">database-url.com</environment>
+		<environment name= "stg" database ="Database-Name" region="EU">database-url.com</environment>
+		<environment name= "production" database ="Database-Name" region="US">database-url.com</environment>
+		<environment name= "production" database ="Database-Name" region="EU">database-url.com</environment>
+	</environments>
+	<credentials>
+		<secret name="dev" region="US">aws-secret-dev</secret>
+		<secret name="dev" region="EU">aws-secret-dev</secret>
+		<secret name="qa" region="EU">aws-secret-qa</secret>
+		<secret name="stg" region="EU">aws-secret-stg</secret>
+		<secret name="production" region="EU">aws-secret-prod</secret>
+	</credentials>
+</app>

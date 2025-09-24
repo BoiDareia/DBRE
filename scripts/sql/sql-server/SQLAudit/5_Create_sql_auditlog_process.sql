@@ -1,0 +1,184 @@
+USE CompanyMonitor
+GO
+
+IF EXISTS (SELECT *
+FROM sys.procedures
+WHERE object_id = OBJECT_ID('dbo.sql_auditlog_process'))
+DROP PROC dbo.sql_auditlog_process
+GO
+
+/*
+	USAGE: Execute the stored procedure to process any new SQLAudit records into the table
+	EXEC dbo.sql_auditlog_process
+	SELECT * FROM [dbo].[SQLAuditLog]
+*/
+CREATE PROCEDURE dbo.sql_auditlog_process
+AS
+BEGIN
+	SET NOCOUNT ON
+
+	DECLARE @CutOffDate datetime2
+	DECLARE @AuditFile sysname = 'D:\rdsdbdata\SQLAudit\*.sqlaudit'
+	DECLARE @MinDiff int = datediff(MI,getutcdate(),getdate())
+
+	SELECT @CutOffDate = MAX(event_UTC_time)
+	FROM [dbo].[SQLAuditLog]
+	SET @CutOffDate = ISNULL(@CutOffDate,'2008-01-01')
+
+	INSERT INTO [dbo].[SQLAuditLog]
+		(
+		[event_UTC_time]
+		,[event_local_time]
+		,[action_id]
+		,[Action]
+		,[succeeded]
+		,[session_id]
+		,[object_id]
+		,[object_name]
+		,[session_server_principal_name]
+		,[database_name]
+		,[Statement]
+		,[Connection_IP]
+		)
+	SELECT
+		event_time as event_UTC_time, --> All Events written by Extended Events are captured with UTC datetime2 values, and consequently since Server Audits run on top of the Extended Events engine so are the Audit Events
+		DATEADD(MI,@MinDiff,CONVERT(datetime2,event_time)) as event_local_time, --> Get event time in local time
+		action_id,
+		CASE action_id
+			WHEN 'ACDO' THEN 'DATABASE_OBJECT_ACCESS_GROUP'
+			WHEN 'ACO'  THEN 'SCHEMA_OBJECT_ACCESS_GROUP'
+			WHEN 'ADBO' THEN 'BULK ADMIN'
+			WHEN 'ADDP' THEN 'DATABASE_ROLE_MEMBER_CHANGE_GROUP'
+			WHEN 'ADSP' THEN 'SERVER_ROLE_MEMBER_CHANGE_GROUP'
+			WHEN 'AL'   THEN 'ALTER'
+			WHEN 'ALCN' THEN 'ALTER CONNECTION'
+			WHEN 'ALRS' THEN 'ALTER RESOURCES'
+			WHEN 'ALSS' THEN 'ALTER SERVER STATE'
+			WHEN 'ALST' THEN 'ALTER SETTINGS'
+			WHEN 'ALTR' THEN 'ALTER TRACE'
+			WHEN 'APRL' THEN 'ADD MEMBER'
+			WHEN 'AS'   THEN 'ACCESS'
+			WHEN 'AUSC' THEN 'AUDIT SESSION CHANGED'
+			WHEN 'AUSF' THEN 'AUDIT SHUTDOWN ON FAILURE'
+			WHEN 'AUTH' THEN 'AUTHENTICATE'
+			WHEN 'BA'   THEN 'BACKUP'
+			WHEN 'BAL'  THEN 'BACKUP LOG'
+			WHEN 'BRDB' THEN 'BACKUP_RESTORE_GROUP'
+			WHEN 'C2OF' THEN 'TRACE AUDIT C2OFF'
+			WHEN 'C2ON' THEN 'TRACE AUDIT C2ON'
+			WHEN 'CCLG' THEN 'CHANGE LOGIN CREDENTIAL'
+			WHEN 'CMLG' THEN 'CREDENTIAL MAP TO LOGIN'
+			WHEN 'CNAU' THEN 'AUDIT_CHANGE_GROUP'
+			WHEN 'CO'   THEN 'CONNECT'
+			WHEN 'CP'   THEN 'CHECKPOINT'
+			WHEN 'CR'   THEN 'CREATE'
+			WHEN 'D'	THEN 'DENY'
+			WHEN 'DBCC' THEN 'DBCC'
+			WHEN 'DBCG' THEN 'DBCC_GROUP'
+			WHEN 'DL'   THEN 'DELETE'
+			WHEN 'DPRL' THEN 'DROP MEMBER'
+			WHEN 'DR'   THEN 'DROP'
+			WHEN 'DWC'  THEN 'DENY WITH CASCADE'
+			WHEN 'EX'   THEN 'EXECUTE'
+			WHEN 'FT'   THEN 'FULLTEXT'
+			WHEN 'FTG'  THEN 'FULLTEXT_GROUP'
+			WHEN 'G'    THEN 'GRANT'
+			WHEN 'GRDB' THEN 'DATABASE_PERMISSION_CHANGE_GROUP'
+			WHEN 'GRDO' THEN 'DATABASE_OBJECT_PERMISSION_CHANGE_GROUP'
+			WHEN 'GRO'  THEN 'SCHEMA_OBJECT_PERMISSION_CHANGE_GROUP'
+			WHEN 'GRSO' THEN 'SERVER_OBJECT_PERMISSION_CHANGE_GROUP'
+			WHEN 'GRSV' THEN 'SERVER_PERMISSION_CHANGE_GROUP'
+			WHEN 'GWG'  THEN 'GRANT WITH GRANT'
+			WHEN 'IMDP' THEN 'DATABASE_PRINCIPAL_IMPERSONATION_GROUP'
+			WHEN 'IMP'  THEN 'IMPERSONATE'
+			WHEN 'IMSP' THEN 'SERVER_PRINCIPAL_IMPERSONATION_GROUP'
+			WHEN 'IN'   THEN 'INSERT'
+			WHEN 'LGB'  THEN 'BROKER LOGIN'
+			WHEN 'LGBG' THEN 'BROKER_LOGIN_GROUP'
+			WHEN 'LGDA' THEN 'DISABLE'
+			WHEN 'LGDB' THEN 'CHANGE DEFAULT DATABASE'
+			WHEN 'LGEA' THEN 'ENABLE'
+			WHEN 'LGFL' THEN 'FAILED_LOGIN_GROUP'
+			WHEN 'LGIF' THEN 'LOGIN FAILED'
+			WHEN 'LGIS' THEN 'LOGIN SUCCEEDED'
+			WHEN 'LGLG' THEN 'CHANGE DEFAULT LANGUAGE'
+			WHEN 'LGM'  THEN 'DATABASE MIRRORING LOGIN'
+			WHEN 'LGMG' THEN 'DATABASE_MIRRORING_LOGIN_GROUP'
+			WHEN 'LGNM' THEN 'NAME CHANGE'
+			WHEN 'LGO'  THEN 'LOGOUT'
+			WHEN 'LGSD' THEN 'SUCCESSFUL_LOGIN_GROUP'
+			WHEN 'LO'   THEN 'LOGOUT_GROUP'
+			WHEN 'MNDB' THEN 'DATABASE_CHANGE_GROUP'
+			WHEN 'MNDO' THEN 'DATABASE_OBJECT_CHANGE_GROUP'
+			WHEN 'MNDP' THEN 'DATABASE_PRINCIPAL_CHANGE_GROUP'
+			WHEN 'MNO'  THEN 'SCHEMA_OBJECT_CHANGE_GROUP'
+			WHEN 'MNSO' THEN 'SERVER_OBJECT_CHANGE_GROUP'
+			WHEN 'MNSP' THEN 'SERVER_PRINCIPAL_CHANGE_GROUP'
+			WHEN 'NMLG' THEN 'NO CREDENTIAL MAP TO LOGIN'
+			WHEN 'OP'   THEN 'OPEN'
+			WHEN 'OPDB' THEN 'DATABASE_OPERATION_GROUP'
+			WHEN 'OPSV' THEN 'SERVER_OPERATION_GROUP'
+			WHEN 'PWAR' THEN 'APPLICATION_ROLE_CHANGE_PASSWORD_GROUP'
+			WHEN 'PWC'  THEN 'CHANGE PASSWORD'
+			WHEN 'PWCG' THEN 'LOGIN_CHANGE_PASSWORD_GROUP'
+			WHEN 'PWCS' THEN 'CHANGE OWN PASSWORD'
+			WHEN 'PWEX' THEN 'PASSWORD EXPIRATION'
+			WHEN 'PWMC' THEN 'MUST CHANGE PASSWORD'
+			WHEN 'PWPL' THEN 'PASSWORD POLICY'
+			WHEN 'PWR'  THEN 'RESET PASSWORD'
+			WHEN 'PWRS' THEN 'RESET OWN PASSWORD'
+			WHEN 'PWU'  THEN 'UNLOCK ACCOUNT'
+			WHEN 'R'    THEN 'REVOKE'
+			WHEN 'RC'   THEN 'RECEIVE'
+			WHEN 'RF'   THEN 'REFERENCES'
+			WHEN 'RS'   THEN 'RESTORE'
+			WHEN 'RWC'  THEN 'REVOKE WITH CASCADE'
+			WHEN 'RWG'  THEN 'REVOKE WITH GRANT'
+			WHEN 'SL'   THEN 'SELECT'
+			WHEN 'SN'   THEN 'SEND'
+			WHEN 'SPLN' THEN 'SHOW PLAN'
+			WHEN 'STSV' THEN 'SERVER_STATE_CHANGE_GROUP'
+			WHEN 'SUQN' THEN 'SUBSCRIBE QUERY NOTIFICATION'
+			WHEN 'SVCN' THEN 'SERVER CONTINUE'
+			WHEN 'SVPD' THEN 'SERVER PAUSED'
+			WHEN 'SVSD' THEN 'SERVER SHUTDOWN'
+			WHEN 'SVSR' THEN 'SERVER STARTED'
+			WHEN 'TASA' THEN 'TRACE AUDIT START'
+			WHEN 'TASP' THEN 'TRACE AUDIT STOP'
+			WHEN 'TO'   THEN 'TAKE OWNERSHIP'
+			WHEN 'TODB' THEN 'DATABASE_OWNERSHIP_CHANGE_GROUP'
+			WHEN 'TODO' THEN 'DATABASE_OBJECT_OWNERSHIP_CHANGE_GROUP'
+			WHEN 'TOO'  THEN 'SCHEMA_OBJECT_OWNERSHIP_CHANGE_GROUP'
+			WHEN 'TOSO' THEN 'SERVER_OBJECT_OWNERSHIP_CHANGE_GROUP'
+			WHEN 'TRCG' THEN 'TRACE_CHANGE_GROUP'
+			WHEN 'TRO'  THEN 'TRANSFER'
+			WHEN 'UP'   THEN 'UPDATE'
+			WHEN 'USAF' THEN 'CHANGE USERS LOGIN AUTO'
+			WHEN 'USLG' THEN 'CHANGE USERS LOGIN'
+			WHEN 'VDST' THEN 'VIEW DATABASE STATE'
+			WHEN 'VSST' THEN 'VIEW SERVER STATE'
+			WHEN 'VWCT' THEN 'VIEW CHANGETRACKING'
+			WHEN 'XA'   THEN 'EXTERNAL ACCESS ASSEMBLY'
+			WHEN 'XU'   THEN 'UNSAFE ASSEMBLY'
+			ELSE 'UKNOWN' 
+		END AS [Action],
+		succeeded,
+		session_id,
+		object_id,
+		object_name,
+		session_server_principal_name,
+		--server_principal_name,
+		--server_instance_name,
+		database_name,
+		Statement,
+		CAST(additional_information AS XML).value('declare namespace z="http://schemas.microsoft.com/sqlserver/2008/sqlaudit_data"; (//z:address)[1]', 'nvarchar(300)') as Connection_IP
+	--,CAST(additional_information AS XML).value('declare namespace z="http://schemas.microsoft.com/sqlserver/2008/sqlaudit_data"; (//z:pooled_connection)[1]', 'nvarchar(300)') as IsPooledConnection
+	--,CAST(additional_information AS XML).value('declare namespace z="http://schemas.microsoft.com/sqlserver/2008/sqlaudit_data"; (//z:is_dac)[1]', 'nvarchar(300)') as IsDAC
+	FROM msdb.dbo.rds_fn_get_audit_file(@AuditFile,default,default)
+	--> Put the Path and File name of your Audit File
+	WHERE event_time > @CutOffDate
+END
+GO
+
+GRANT EXECUTE ON dbo.sql_auditlog_process TO splunk
+GO

@@ -1,0 +1,71 @@
+name: Send DBA Review Request
+
+# Allows the workflow to be triggered manually from the Actions tab in GitHub.
+on:
+  workflow_dispatch
+  # The 'issue_comment' trigger is currently commented out.
+  # If enabled, it would run the workflow automatically when a comment is pushed.
+  ##issue_comment
+
+jobs:
+  get_ticket_info:
+    if: ${{ github.event.issue.pull_request != null && contains(toLower(github.event.comment.body), '@company/dba review requested') }}
+    runs-on: ubuntu-latest
+    outputs:
+      jira_ticket_url: ${{ steps.get_ticket_url.outputs.jira_ticket_link }}
+    steps:
+      - id: repoCheckout
+        uses: actions/checkout@v4
+
+      - id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - id: get_ticket_url
+        run: |
+          pip install requests
+          python .github/actions/get_ticket_url.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_TOKEN_DB: ${{ secrets.JIRA_TOKEN_DB }}
+          REPO_NAME: ${{ toJson(github.repository) }}
+          PR_URL: ${{ toJson(github.event.issue.pull_request.html_url) }}
+
+  slack-notification-send:
+    needs: get_ticket_info
+    if: ${{ needs.get_ticket_info.outputs.jira_ticket_url != ''}}
+    runs-on: ubuntu-latest
+    steps:
+      - id: dba_review_request
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: "G01CA414DPH"
+            text: "DBA review requested for ${{ github.repository }}"
+
+            blocks:
+              - type: header
+                text:
+                  type: plain_text
+                  text: "PR review requested by ${{ github.event.comment.user.login }}"
+                
+              - type: divider
+              
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "<!subteam^SOMETHING> Please review the DB ticket for relevant PR information"
+              - type: actions
+                elements:
+                  - type: button
+                    text:
+                      type: plain_text
+                      text: "DB Ticket"
+                      emoji: true
+                    url: "${{ needs.get_ticket_info.outputs.jira_ticket_url }}"
+
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

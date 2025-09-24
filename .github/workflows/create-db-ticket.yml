@@ -1,0 +1,79 @@
+name: Create DB Project Ticket
+
+# Allows the workflow to be triggered manually from the Actions tab in GitHub.
+on:
+  workflow_dispatch
+  # The 'pull_request' trigger is currently commented out.
+  # If enabled, it would run the workflow automatically when a pull request is
+  # opened, edited, reopened, or has new commits pushed.
+  ##pull_request:
+  ##types: [opened, synchronize]
+
+jobs:
+  create-db-ticket:
+    if: ${{contains(toLower(github.event.comment.body), '@company/dba review requested'}}
+    runs-on: ubuntu-latest
+    outputs:
+      output1: ${{ steps.ticket_creation.outputs.jira_action }}
+      output2: ${{ steps.ticket_creation.outputs.jira_ticket_link }}
+    steps:
+      - id: repoCheckout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          ref: ${{ github.head_ref }}
+
+      - id: fileID
+        shell: bash
+        run: |
+          current_commit=$(git rev-parse HEAD)
+          previous_commit=$(git rev-parse HEAD^1)
+          SQL_FILES=$(git diff --name-only -r $previous_commit $current_commit | grep '\.sql$')  
+          if [ -z "$SQL_FILES" ]; then
+          echo "No SQL files changed."
+          echo "DIFFS=0" >> $GITHUB_ENV
+          else
+          echo "SQL files changed: $SQL_FILES"
+          FILE_LIST=''
+          for i in $SQL_FILES
+          do
+              FILE_LIST+="$i "
+          done
+          echo "SQL_FILES=$FILE_LIST" >> $GITHUB_ENV
+          echo "DIFFS=1" >> $GITHUB_ENV
+          fi
+
+      - id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - id: ticket_creation
+        run: |
+          pip install requests   #Install necessary packages
+          python .github/actions/create_db_ticket.py
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JIRA_TOKEN_DB: ${{ secrets.JIRA_TOKEN_DB }}
+          PR_URL: ${{ toJson(github.event.pull_request._links.html.href) }}
+          REPO_NAME: ${{ toJson(github.repository) }}
+          HEAD_REF: ${{ toJson(github.head_ref) }}
+          SQL_DIFFS: ${{ env.DIFFS }}
+          SQL_FILES: ${{ env.SQL_FILES }}
+
+  pr-comment:
+    needs: create-db-ticket
+    if: ${{ needs.create-db-ticket.outputs.output1 == 'created'}}
+    runs-on: ubuntu-latest
+    steps:
+      - id: repoCheckout
+        uses: actions/checkout@v4
+
+      - id: pr_comment
+        run: gh pr comment $PR_NUMBER --body "A database ticket has been created for this PR. Ticket Link - $DB_TICKET_LINK"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DB_TICKET_LINK: ${{ needs.create-db-ticket.outputs.output2 }}

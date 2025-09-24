@@ -1,0 +1,170 @@
+
+Void validateDatabase(){
+    def databases = ["jira", "salesforce", "salesforce_marketing_cloud", "biotail", "nicelabel", "data_mart"];
+
+    env.validateDB = DATABASE.toLowerCase()
+
+    if(databases.contains(env.validateDB)){
+        return true
+    }else{
+        return false
+    }
+}
+
+Void validateRelease(){
+    /* Check if the Label field has the correct branching name, either begining with release or v (for version) or if it's NULL*/
+    if (RELEASE == null)
+        return false
+
+    env.validateRelease = RELEASE.substring(0,RELEASE.length()).toLowerCase()
+    env.validateTrueFalse = RELEASE.substring(0,1).toLowerCase()
+
+    if (RELEASE.substring(0,1).toLowerCase().equalsIgnoreCase("r") || RELEASE.substring(0,1).toLowerCase().equalsIgnoreCase("v")){
+        return true
+    }else{
+        return false
+    }
+
+    
+}
+
+pipeline {
+        agent {
+            node { 
+                label "Jenkins-DB" 
+            }
+        }
+
+        options {
+            buildDiscarder(logRotator(numToKeepStr:'10'))
+            timeout (time: 50, unit: 'MINUTES')
+        } 
+
+        parameters {
+            string(
+                name: 'DATABASE'
+            )
+            
+            string(
+                name: 'RELEASE'
+            )
+            
+            string(
+                name: 'ENVIRONMENT'
+            )
+
+            booleanParam(
+                name: 'REDEPLOY',
+                defaultValue: false
+            )
+        }
+
+        stages {
+            stage ('CHECK VARIABLES') {
+                steps {
+                    script{
+
+                        
+
+                        // Set deployment name in jenkins for previous or ongoing deployment
+                        currentBuild.displayName = "${DATABASE}-${ENVIRONMENT}-${RELEASE}-${REDEPLOY}"
+
+                        checkDB = validateDatabase()
+
+                        checkRelease = validateRelease()
+
+                        println "checkDB: ${checkDB}"
+                        println "checkRelease: ${checkRelease}"
+
+                        println "validateDatabase: ${env.validateDB}"
+                        println "validateRelease: ${env.validateRelease}"
+                        println "validateTrueFalse: ${env.validateTrueFalse}"
+
+                        if ("${env.validateDB}" == "nicelabel"){
+                            env.REGION = "EU"
+                            if ("${ENVIRONMENT}" == "PROD"){
+                                env.ISTAG = true
+                            }else{  
+                                env.ISTAG = false
+                            } 
+                        }
+
+                        if (!checkDB || !checkRelease){
+                            if ("${ENVIRONMENT}" == "PROD"){
+                            SLACK_RESPONSE = (slackSend(channel: "pub-release-coord-prod", color: "danger",username: "DB Deploy Notifications", message: "Cannot Deploy Database to ${ENVIRONMENT} because something is incorrect!! \nValidate the variables bellow. \nDatabase: `${DATABASE}` \nRelease: `${RELEASE}`"))
+                            }
+                            else{
+                            SLACK_RESPONSE = (slackSend(channel: "pub-release-coord-preprod", color: "danger",username: "DB Deploy Notifications", message: "Cannot Deploy Database to ${ENVIRONMENT} because something is incorrect!! \nValidate the variables bellow. \nDatabase: `${DATABASE}` \nRelease: `${RELEASE}`"))
+                            } 
+
+                            currentBuild.result = 'ABORTED'
+                            error('Stopping before running pipeline...')
+                        }else {
+                                println "Database ENV: ${env.validateDB}"
+                                println "Release ENV: ${RELEASE}"
+                                println "Environment ENV: ${ENVIRONMENT}"
+                                println "Redeploy ENV: ${REDEPLOY}"
+                        } 
+                    }
+                }
+            }
+
+            stage('RUN PIPELINE') {
+                steps {
+                    script {
+                        
+                        if(env.validateDB != null && RELEASE != null && ENVIRONMENT != null && REDEPLOY != null){
+                            if ("${env.validateDB}" == "nicelabel"){
+                                def pipeline = 'Release/NiceLabel_Release_Schema'
+
+                                println("\n ${pipeline}")
+                                
+                                // This will deploy the NiceLabel job
+                                if(pipeline != null){
+                                    build job: "${pipeline}", wait: false, parameters: [
+                                        string(name: 'SELECT_ENVIRONMENT', value: ENVIRONMENT),
+                                        string(name: 'RELEASE', value: RELEASE),
+                                        string(name: 'ISTAG', value: env.ISTAG),
+                                        string(name: 'REGION', value: env.REGION),
+                                        string(name: 'DATABASE_SCHEMA', value: DATABASE)
+
+                                    ]
+                                }
+                            }else{
+                                def pipeline = 'Release/GenericDB_Release/master'
+
+                                println("\n ${pipeline}")
+                                
+                                // This will deploy the job
+                                if(pipeline != null){
+                                    build job: "${pipeline}", wait: false, parameters: [
+                                        string(name: 'SELECT_ENVIRONMENT', value: ENVIRONMENT),
+                                        string(name: 'RELEASE', value: RELEASE),
+                                        string(name: 'DATABASE', value: env.validateDB),
+                                        booleanParam(name: 'REDEPLOY', value: REDEPLOY)
+
+                                    ]
+                                }
+                            }
+                                
+                            
+                                
+                        }
+                    }
+                }
+            }
+        }
+        
+        post {
+            failure {
+                script {
+                    println("FAILED")
+                }            
+            }
+            success {
+                script{
+                    println("SUCCESS")
+                }            
+            }
+        }
+}

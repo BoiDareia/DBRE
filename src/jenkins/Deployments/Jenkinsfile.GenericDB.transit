@@ -1,0 +1,361 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import hudson.model.*
+
+Void assumeRole(targetenv) {
+    TARGETENV = "${targetenv.name}"
+    SESSION = "${targetenv.session}"
+    FILE = "${env.WORKSPACE}\\assumerole.txt"
+    println "Assume Role in ${TARGETENV} Account from the file ${FILE}"
+    bat(returnStdout:true, script: "aws sts assume-role --role-arn ${TARGETENV} --role-session-name ${SESSION} > ${FILE}")
+    
+    def props = readJSON file: "${FILE}"
+
+    AWS_ACCESS_KEY_ID = props['Credentials']['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = props['Credentials']['SecretAccessKey']
+    AWS_SESSION_TOKEN = props['Credentials']['SessionToken']
+
+    env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+    env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+    env.AWS_SESSION_TOKEN = AWS_SESSION_TOKEN
+
+    println(env.AWS_ACCESS_KEY_ID)
+    println(env.AWS_SECRET_ACCESS_KEY)
+    println(env.AWS_SESSION_TOKEN)
+
+    bat(returnStdout:true, script: "aws sts get-caller-identity --output text --query Account")
+}
+
+
+pipeline {
+    options {
+        buildDiscarder(logRotator(numToKeepStr:'10'))
+        timeout (time: 50, unit: 'MINUTES')
+    } 
+
+    environment {        
+        SUPPORT_GROUP = 'dba@company.com'
+        SETCMDOFF = bat(returnStdout:true, script: '@echo off')
+    }
+
+        parameters {    
+            choice(name: 'SELECT_ENVIRONMENT',
+            choices: ['DEV', 'STG', 'PROD', 'Sandbox']
+        )
+
+        string (
+            name: 'RELEASE',
+            description: "Provide the name of the Git branch or tag to checkout, build database changes for, and deploy to database" )
+
+        booleanParam (
+            name: 'REDEPLOY',
+            description: "Set to true if this is a deploy of a version already previously deployed.",)
+
+
+        choice (
+            name: 'DATABASE',
+            description: "Choose the database you want to deploy database changes for",
+            choices: 'jira\nsalesforce\nsalesforce_marketing_cloud\nlaurorafinance\nlaurorareport\nbiotail\ndata_mart')
+    }
+
+    agent {
+        node {
+            label "Jenkins-DB"
+        }
+    }
+ 
+    stages {
+
+        stage('DEFINE VARIABLES') {
+            steps {
+                script {
+                    
+                    env.WORKSPACE = pwd()
+
+                    // This IF will prevent the job from failing in case it's being called by another Job whithin Jenkins without a valid user
+                    if(currentBuild.rawBuild.getCause(Cause.UserIdCause) != null) {
+                        env.userId = currentBuild.rawBuild.getCause(Cause.UserIdCause).getUserId()
+                        env.AWSDEPLOY = "Manual"
+                    } else {
+                        env.userId = "user1@company.com"
+                        env.AWSDEPLOY = "Automatic"
+                    }
+
+                    switch(SELECT_ENVIRONMENT) {
+                        case "PROD":
+                            EXECUTE = "true"
+                            env.AWSENV = "prod"
+                            ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+                            switch(DATABASE) {
+                                case "jira":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break									
+                                case "salesforce":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "salesforce_marketing_cloud":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break									
+                                case "laurorafinance":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "laurorareport":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "biotail":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break   
+                                case "data_mart":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break 
+                            } 
+                            /*error "Nothing to see here. PROD deployment via TR is not ready yet"*/
+                            break
+                        case "DEV":
+                            EXECUTE = "true"
+                            env.AWSENV = "dev"
+                            ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role' 
+                            env.SECRETMANAGERID = 'set-secret'
+                            break
+                        case "Sandbox":
+                            EXECUTE = "true"
+                            env.AWSENV = "sandbox"
+                            ROLE_ARN='arn:aws:iam::account-number:role/devops-team-role' 
+                            env.SECRETMANAGERID = 'set-secret'
+                            break
+                        case "STG":
+                            EXECUTE = "true"
+                            env.AWSENV = "stg"
+                            ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'  
+                            switch(DATABASE) {
+                                case "jira":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break									
+                                case "salesforce":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "salesforce_marketing_cloud":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break									
+                                case "laurorafinance":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "laurorareport":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break
+                                case "biotail":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break 
+                                case "data_mart":
+                                    env.SECRETMANAGERID = 'set-secret'
+                                    break 
+                            }                 
+                            /*error "Nothing to see here. STG deployment via TR is not ready yet" */
+                            break
+                        default:
+                            println "This AWS account: ${SELECT_ENVIRONMENT} is not part of deployment process or something went terribly wrong "
+                            EXECUTE = "false"               
+                            break             
+                    }
+
+                    assumeRole([name: "${ROLE_ARN}", session: "db-pipeline"])                                         
+                    
+                    env.AWS_REGION = 'us-east-1'
+
+                    switch(env.AWS_REGION) {
+                        case "us-east-1":
+                            env.FLAG = ':flag-us:'
+                            break
+                        case "eu-west-1":
+                            env.FLAG = ':flag-eu:'
+                            break
+                    }
+
+                    now = new Date()
+
+                    now_formatted = now.format("YYYY.MM.dd.HH", TimeZone.getTimeZone('UTC'))
+
+                    env.RELEASE_FILE = "DBChangesDeployment_${env.AWSENV}_${DATABASE}.txt"
+
+                    // Add Display Name to identify deployment
+                    currentBuild.displayName = "${DATABASE}-${SELECT_ENVIRONMENT}-${RELEASE}-${REDEPLOY}"                 
+    
+                    if ("${env.AWSENV}" == "prod"){
+					    SLACK_RESPONSE = (slackSend(channel: "release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "Deploying Database ${DATABASE} `${RELEASE}` to ${SELECT_ENVIRONMENT} ${env.FLAG}"))
+					}
+					else{
+					SLACK_RESPONSE = (slackSend(channel: "release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "Deploying Database ${DATABASE} `${RELEASE}` to ${SELECT_ENVIRONMENT} ${env.FLAG}"))
+					}
+
+                    println "Region: ${env.AWS_REGION} environment: ${env.AWSENV} Database : ${DATABASE} Secret: ${env.SECRETMANAGERID}"
+					
+                }
+            }
+        }
+
+        stage ('CHECK: Approval') {
+            steps {
+                script {
+
+                    def listOfGroupsAllowedToDeploy = ["user1@company.com", "user2@company.com", "user3@company.com"]
+                    
+
+                    def submitter = listOfGroupsAllowedToDeploy.join(", ")
+
+                    switch("${env.AWSENV}") {
+                        case "prod":
+                            if ("${listOfGroupsAllowedToDeploy}".contains("${env.userId}")){
+                                println "WAITING FOR INPUT - Request Approval"
+
+                                if ("${env.AWSENV}" == "prod"){slackSend(channel: "db-jenkins", color: "good", message: "<!subteam^SOMETHING> ${DATABASE} database changes deployment for `${RELEASE}` to ${SELECT_ENVIRONMENT} ${env.FLAG} waiting for approval: https://jenkins.company-tr.com/jenkins/job/DBA_Release/job/DBA_GenericDB_Release/job/master/ ")}
+                            
+                                def inputResponse = input(message: "Should we proceed with deploying ${DATABASE} database changes for ${RELEASE} to ${SELECT_ENVIRONMENT} ${env.FLAG}?", submitter: "${submitter}", submitterParameter: 'approver' )
+                                
+                                echo "Approved by $inputResponse"
+                            }else {
+                                echo "You are not authorized to run this pipeline in ${env.AWSENV}"
+                            }
+                            break
+                        case "dev":
+                            echo "Approved automatically because it's ${env.AWSENV} and it's running with the user ${env.userId}" 
+                            break
+                        case "stg":
+                            echo "Approved automatically because it's ${env.AWSENV} and it's running with the user ${env.userId}" 
+                            break
+                        default:
+                            echo "You are not authorized to run this pipeline in ${env.AWSENV}"              
+                            break             
+                    }
+         
+					
+                }
+            }
+        }
+
+        stage ('DATABASE DEPLOYMENT') {
+            steps{
+				script{
+                FLYWAYOUTPUT=powershell(returnStdout: true, script: '''
+                    ####################################################################################################################################
+                    # Build, and deploy database changes for a version run on Windows-Jenkins-slave
+                    ####################################################################################################################################
+                    
+                    $ErrorActionPreference = 'Stop'                
+                    Set-Location "C:\\src\\Database-deployment\\GenericDB"
+
+                    [string] $database = $env:DATABASE
+                    
+                    if ($database -eq "jira") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\Jira.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\de-jira-pull'
+                    }					
+                    if ($database -eq "salesforce") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\Salesforce.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\de-salesforce'
+                    }
+                    if ($database -eq "salesforce_marketing_cloud") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\Salesforce_marketing_cloud.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\de-salesforce-marketing-cloud'
+                    }					
+                    if ($database -eq "laurorafinance") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\LauroraFinance.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\ds-finance-pipelines'
+                    }
+                    if ($database -eq "laurorareport") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\LauroraReport.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\ds-airflow-reporting-engine'
+                    }
+                    if ($database -eq "biotail") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\Biotail.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\biotail'
+                    }
+                    if ($database -eq "data_mart") {
+                        $env:CONFIGFILE = 'C:\\src\\Database-deployment\\GenericDB\\config\\Data_mart.xml'
+                        $env:CHECKOUTPATH = 'C:\\src\\data_mart'
+                    }
+
+                    . .\\GitFunctionsGenericDB.ps1
+                    . .\\BuildFunctionsGenericDB.ps1
+                    . .\\FlywayFunctionsGenericDB.ps1
+                    . .\\DeployDatabaseVersionsGenericDB.ps1
+
+                    #The following parameters will have different values, for each Jenkins job, but will only be set once for each job in Jenkins pipeline. 
+                    [string] $secretid = $env:SECRETMANAGERID
+                    [string] $region =  $env:AWS_REGION 
+                    [string] $configFile = "$env:CONFIGFILE"
+                    [string] $env = $env:AWSENV #set to appropriate environment. current choices: dev, prod, and train for testing.
+                    [string] $CheckoutPath = "$env:CHECKOUTPATH"
+
+                    #The following parameters will have require User input, or can be set dynamically. In any case their value will be set per release deployment.
+                    [string] $BranchName = $env:RELEASE #can be a branch or a tag
+                    [string] $strIsTag = "False"
+                    [string] $strIsRedeploy = $env:REDEPLOY
+
+                    [bool] $IsTag = ($strIsTag -eq 'True')
+                    [bool] $IsRedeploy = ($strisRedeploy -eq 'True')
+                    $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                    [string] $username = $secretvalue.username
+                    [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                    $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+                                         
+                    [string] $toThrow = [string]::Empty 
+                    $LastExitCode = 0 
+
+                    try{
+					.{
+
+                        ## build, and deploy database changes
+                        [string] $flywayOutput=DoDatabaseContinuousDeployment $configFile $env $credentials $BranchName $CheckoutPath $IsTag $IsRedeploy
+						} | Out-Null
+						return $flywayOutput
+
+                    }
+                    catch{
+
+                        $toThrow = ("Deployment failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                        $LastExitCode = 1
+                    }
+                    finally{
+                        .{
+                            
+                            if ($toThrow){
+                                Write-Error $toThrow
+                            }
+                            } | Out-Null
+                            
+                            exit $LastExitCode
+                    }
+                    ####################################################################################################################################
+                ''')
+				
+				}
+            }
+        }
+    }
+
+    post {
+        failure {
+            script{
+                slackSend(channel: "db-jenkins", color: "danger", message: "$AWSDEPLOY database deployment for `${DATABASE}` `${RELEASE}` has FAILED to ${SELECT_ENVIRONMENT} ${env.FLAG}! :scream:")
+                SLACK_RESPONSE.addReaction('red_circle')
+
+                slackUploadFile (channel: SLACK_RESPONSE.threadId, filePath: "${env.RELEASE_FILE}", initialComment:  "Adding file for Error review.")
+                slackSend(channel: SLACK_RESPONSE.threadId, color: "danger", message: "${DATABASE} database changes deployment for `${RELEASE}` to ${SELECT_ENVIRONMENT} ${env.FLAG} FAILED! :scream:")
+            }
+        }
+        success {
+            script{
+                slackSend(channel: "db-jenkins", color: "good", message: "$AWSDEPLOY database deployment for `${DATABASE}` `${RELEASE}` was SUCCESSFULL to ${SELECT_ENVIRONMENT} ${env.FLAG}! :tada:")
+                SLACK_RESPONSE.addReaction('large_green_circle')
+
+
+                slackUploadFile (channel: SLACK_RESPONSE.threadId, filePath: "${env.RELEASE_FILE}", initialComment:  "Adding file for review.")
+                slackSend(channel: SLACK_RESPONSE.threadId, color: "good", message: "${DATABASE} database changes for `${RELEASE}` were SUCCESSFULLY deployed to ${SELECT_ENVIRONMENT} ${env.FLAG} :tada:")
+            }
+        }
+        cleanup {        
+            cleanWs()
+        }
+    } 
+    
+}

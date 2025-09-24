@@ -1,0 +1,24 @@
+USE [DB2AUDIT]
+GO
+
+CREATE DATABASE AUDIT SPECIFICATION [DatabaseAuditSpecification]
+FOR SERVER AUDIT [SQLAudit]
+	ADD (INSERT, UPDATE, DELETE, SELECT, EXECUTE ON DATABASE::[DB2AUDIT] BY
+	 [dbo] -- Audit Administrators
+	,[public]
+	,[db_datareader]
+	)
+WITH (STATE = ON)
+GO
+
+USE [DB2AUDIT2]
+GO
+
+CREATE DATABASE AUDIT SPECIFICATION [DatabaseAuditSpecification]
+FOR SERVER AUDIT [SQLAudit]
+	ADD (INSERT, UPDATE, DELETE, SELECT, EXECUTE ON DATABASE::[DB2AUDIT2] BY
+	 [dbo] -- Audit Administrators
+	,[public]
+	,[db_datareader]
+	)
+WITH (STATE = ON)

@@ -1,0 +1,630 @@
+#!/usr/bin/groovy
+import groovy.json.JsonOutput
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+Void assumeRoleSQLServer(targetenv) {
+    TARGETENV = "${targetenv.name}"
+    SESSION = "${targetenv.session}"
+    FILE = "${env.WORKSPACE}\\assumeroleSQLServer.txt"
+    println "Assume Role in ${TARGETENV} Account from the file ${FILE}"
+    bat(returnStdout:true, script: "aws sts assume-role --role-arn ${TARGETENV} --role-session-name ${SESSION} > ${FILE}")
+    
+    def props = readJSON file: "${FILE}"
+
+    AWS_ACCESS_KEY_ID = props['Credentials']['AccessKeyId']
+    AWS_SECRET_ACCESS_KEY = props['Credentials']['SecretAccessKey']
+    AWS_SESSION_TOKEN = props['Credentials']['SessionToken']
+
+    env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
+    env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
+    env.AWS_SESSION_TOKEN = AWS_SESSION_TOKEN
+
+    println(env.AWS_ACCESS_KEY_ID)
+    println(env.AWS_SECRET_ACCESS_KEY)
+    println(env.AWS_SESSION_TOKEN)
+
+    bat(returnStdout:true, script: "aws sts get-caller-identity --output text --query Account")
+}
+
+pipeline {
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+        timeout (time: 50, unit: 'MINUTES')
+    } 
+
+    environment {
+        SUPPORT_GROUP = 'dba@company.com'
+        SETCMDOFF = bat(returnStdout:true, script: '@echo off')
+        AWS_ACC_ID = bat(script: '@echo off && aws sts get-caller-identity --output text --query "Account"', returnStdout: true).trim()
+        PRODUCTION = 'account-number'
+        DEV = 'account-number'
+        STG = 'account-number'
+		QA = 'account-number'
+    }
+
+    parameters {    
+            choice(name: 'SELECT_ENVIRONMENT',
+            choices: ['DEV','QA','STG','PROD']
+        )
+
+        string (
+            name: 'RELEASE',
+            description: "Provide the name of the Git branch or tag to checkout, build database changes for, and deploy to database" )
+
+        booleanParam (
+            name: 'ISTAG',
+            description: "Set to true if the provided release name is a tag, false if it is a branch.",
+            defaultValue: false)
+
+        choice (
+            name: 'REGION',
+            description: "Choose the region you want to deploy database changes for",
+            choices: 'EU\nUS')
+
+        choice (
+            name: 'DATABASE_SCHEMA',
+            description: "Choose the database schema you want to deploy database changes for",
+            choices: 'BatchService\nBulkShipping\nClientPortal\nCore\nHcpPortal\nNotes\nOrderFlowApiGateway\nOrderFlowParticipant\nProductCatalog\nQuestionnaire\nShop\nsqlserver_datatools_testing')
+    }
+
+    agent {
+        node {
+            label "Jenkins-DB"
+        }
+    }
+ 
+    stages {
+        stage('DEFINE VARIABLES') {
+            steps {
+                script {
+                    println "AWS account used is: ${AWS_ACC_ID}"
+
+                    switch(SELECT_ENVIRONMENT) {
+                        case "PROD":
+                            EXECUTE = "true"
+                            env.AWSENV = "prod" 
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+							ISTAG = "true"
+                            break
+                        case "DEV":
+                            EXECUTE = "true"
+                            env.AWSENV = "dev" 
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+                            break
+                        case "STG":
+                            EXECUTE = "true"
+                            env.AWSENV = "stg"
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+                            break
+						case "QA":
+                            EXECUTE = "true"
+                            env.AWSENV = "qa" 
+							ROLE_ARN='arn:aws:iam::account-number:role/dba-team-role'
+                            break
+                        default:
+                            println "This AWS account: ${AWS_ACC_ID} is not part of deployment process or something went terribly wrong "
+                            EXECUTE = "false"               
+                            break             
+                    }
+ 
+					assumeRoleSQLServer([name: "${ROLE_ARN}", session: "sqlserver-pipeline"])  					
+                    
+                    if ("${REGION}" == "EU"){
+                        env.AWS_REGION = 'eu-west-1'
+
+                        if ("${env.AWSENV}" == "prod"){env.SECRETMANAGERID = 'set-secret'}
+                        if ("${env.AWSENV}" == "stg"){env.SECRETMANAGERID = 'set-secret'}
+						if ("${env.AWSENV}" == "qa"){env.SECRETMANAGERID = 'set-secret'}
+                        if ("${env.AWSENV}" == "dev"){env.SECRETMANAGERID = 'set-secret'}
+
+						if ("${DATABASE_SCHEMA}" == "BulkShipping") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\BulkShipping_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "ClientPortal") {
+                            //env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\ClientPortal_EU_Release.xml'
+                            // We are disabling the ClientPortal database for the EU region
+                            println "There is no ClientPortal database for the EU region!"
+							EXECUTE = "false" 
+							
+							if ("${env.AWSENV}" == "prod"){
+							slackSend(channel: "pub-release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "There is no ClientPortal database for the EU region!")
+							}
+							else{
+							slackSend(channel: "pub-release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "There is no ClientPortal database for the EU region!")
+							}
+							exit 0
+                        }
+                        if ("${DATABASE_SCHEMA}" == "Core") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Core_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "HcpPortal") {
+							println "There is no HcpPortal database for the EU region!"
+							EXECUTE = "false" 
+							
+							if ("${env.AWSENV}" == "prod"){
+							slackSend(channel: "release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "There is no HcpPortal database for the EU region!")
+							}
+							else{
+							slackSend(channel: "release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "There is no HcpPortal database for the EU region!")
+							}
+							exit 0
+                        }
+						if ("${DATABASE_SCHEMA}" == "Notes") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Notes_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "OrderFlowApiGateway") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\OrderFlowApiGateway_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "OrderFlowParticipant") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\OrderFlowParticipant_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "Questionnaire") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Questionnaire_EU_Release.xml'
+                        }
+                        if ("${DATABASE_SCHEMA}" == "Shop") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Shop_EU_Release.xml'
+                        }
+                        if ("${DATABASE_SCHEMA}" == "BatchService") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\BatchService_EU_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "ProductCatalog") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\ProductCatalog_EU_Release.xml'
+                        }
+                        // Adding test database
+                        if ("${DATABASE_SCHEMA}" == "sqlserver_datatools_testing") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\sqlserver_datatools_testing_US_Release.xml'
+                        }
+                    }
+                    else {
+                        env.AWS_REGION = 'us-east-1'
+
+                        if ("${env.AWSENV}" == "prod"){env.SECRETMANAGERID = 'set-secret'}
+                        if ("${env.AWSENV}" == "stg"){env.SECRETMANAGERID = 'set-secret'}
+						if ("${env.AWSENV}" == "qa"){env.SECRETMANAGERID = 'set-secret'}
+                        if ("${env.AWSENV}" == "dev"){env.SECRETMANAGERID = 'set-secret'}
+                        
+						if ("${DATABASE_SCHEMA}" == "BulkShipping") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\BulkShipping_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "ClientPortal") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\ClientPortal_US_Release.xml'
+                        }
+                        if ("${DATABASE_SCHEMA}" == "Core") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Core_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "HcpPortal") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\HcpPortal_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "Notes") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Notes_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "OrderFlowApiGateway") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\OrderFlowApiGateway_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "OrderFlowParticipant") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\OrderFlowParticipant_US_Release.xml'
+                        }
+						if ("${DATABASE_SCHEMA}" == "Questionnaire") {
+							println "There is no Questionnaire database for the US region!"
+							EXECUTE = "false" 
+							if ("${env.AWSENV}" == "prod"){
+							slackSend(channel: "pub-release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "There is no Questionnaire database for the US region!")
+							}
+							else{
+							slackSend(channel: "pub-release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "There is no Questionnaire database for the US region!")
+							}
+							
+							exit 0
+                        }
+                        if ("${DATABASE_SCHEMA}" == "Shop") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\Shop_US_Release.xml'
+                        }
+                        if ("${DATABASE_SCHEMA}" == "BatchService") {
+							println "There is no BatchService database for the US region!"
+							EXECUTE = "false" 
+							
+							if ("${env.AWSENV}" == "prod"){
+							slackSend(channel: "pub-release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "There is no BatchService database for the US region!")
+							}
+							else{
+							slackSend(channel: "pub-release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "There is no BatchService database for the US region!")
+							}
+							exit 0
+                        }
+						
+						if ("${DATABASE_SCHEMA}" == "ProductCatalog") {
+							println "There is no ProductCatalog database for the US region!"
+							EXECUTE = "false" 
+							
+							if ("${env.AWSENV}" == "prod"){
+							slackSend(channel: "pub-release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "There is no ProductCatalog database for the US region!")
+							}
+							else{
+							slackSend(channel: "pub-release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "There is no ProductCatalog database for the US region!")
+							}
+							exit 0
+                        }
+                        // Adding test database
+                        if ("${DATABASE_SCHEMA}" == "sqlserver_datatools_testing") {
+                            env.CONFIGFILE = 'C:\\src\\Database-deployment\\SQLSchema\\config\\sqlserver_datatools_testing_US_Release.xml'
+                        }
+                    }
+
+                    println "Region: ${env.AWS_REGION} environment: ${SELECT_ENVIRONMENT} Database Schema: ${DATABASE_SCHEMA}"
+                    println(env.CONFIGFILE)
+					
+					// Add Display Name to identify deployment
+                    currentBuild.displayName = "${DATABASE_SCHEMA}-${SELECT_ENVIRONMENT}-${REGION}-${RELEASE}"   
+					
+					BUILD_TRIGGER_BY = "${currentBuild.getBuildCauses()[0].shortDescription}"
+					echo "BUILD_TRIGGER_BY: ${BUILD_TRIGGER_BY}"
+					
+					if ("${env.AWSENV}" == "prod"){
+					SLACK_RESPONSE = (slackSend(channel: "release-coord-prod", color: "good",username: "DB Deploy Notifications", message: "Deploying ${DATABASE_SCHEMA} `${RELEASE}` to ${SELECT_ENVIRONMENT} ${REGION} \n ${BUILD_TRIGGER_BY}"))
+					}
+					else{
+					SLACK_RESPONSE = (slackSend(channel: "release-coord-preprod", color: "good",username: "DB Deploy Notifications", message: "Deploying ${DATABASE_SCHEMA} `${RELEASE}` to ${SELECT_ENVIRONMENT} ${REGION} \n ${BUILD_TRIGGER_BY}"))
+					}
+
+                    // Add VERSION variable to be used for artifact archiving
+                    def matches = (RELEASE =~ /v\d+\.\d+\.\d+/)
+                    if (matches.find()) {
+                        VERSION = matches[0]
+                    } else {
+                        matches = (RELEASE =~ /v\d+\.\d+/)
+                        if (matches.find()) {
+                            VERSION = matches[0]
+                        } else {
+                            matches = (RELEASE =~ /v\d+/)
+                            if (matches.find()) {
+                                VERSION = matches[0]
+                            } else {
+                                VERSION = RELEASE
+                            }
+                        }
+                    }
+                    echo "VERSION: ${VERSION}"
+
+                }
+            }
+        }
+		
+
+        stage ('GENERATE DB CHANGES SCRIPT') {
+            steps{
+				script{
+                env.LOGFILE=powershell(returnStdout: true, script: '''
+                    #########################################################################################################################################
+                    # Checkout release branch or tag from git, and generate database changes script on Windows-Jenkins-slave
+                    #########################################################################################################################################
+                    $ErrorActionPreference = 'Stop'
+                    Set-Location "C:\\src\\Database-deployment\\SQLSchema"
+
+                    . .\\GitFunctions.ps1
+                    . .\\DacPacFunctions.ps1
+                    . .\\FlywayFunctions.ps1
+                    . .\\DeployDatabaseVersions.ps1
+
+                    #The following parameters will have different values, for each Jenkins job, but will only be set once for each job in Jenkins pipeline. 
+                    [string] $secretid = $env:SECRETMANAGERID
+                    [string] $region =  $env:AWS_REGION 
+                    [string] $configFile = "$env:CONFIGFILE"
+                    [string] $env = $env:AWSENV #set to appropriate environment. current choices: dev, prod, and train for testing.
+                    [string] $database_schema = $env:DATABASE_SCHEMA
+
+                    #The following parameters will have require User input, or can be set dynamically. In any case their value will be set per release deployment.
+                    [string] $BranchName = $env:RELEASE #can be a branch or a tag
+                    [string] $strIsTag = $env:ISTAG #true if it is a tag that we are checking out.
+
+                    #Static parameter (set in this script)
+                    [string] $CheckoutPath = "C:\\src"
+
+                    if ($database_schema -eq "Bulkshipping")
+                    {
+                        $CheckoutPath = "C:\\src\\BulkShipping"
+                    }
+					if ($database_schema -eq "ClientPortal")
+                    {
+                        $CheckoutPath = "C:\\src\\CPORT-portal-api"
+                    }
+					if ($database_schema -eq "Core")
+                    {
+                        $CheckoutPath = "C:\\src\\Core"
+                    }
+					if ($database_schema -eq "HcpPortal")
+                    {
+                        $CheckoutPath = "C:\\src\\hcp-portal-api"
+                    }
+					if ($database_schema -eq "Notes")
+                    {
+                        $CheckoutPath = "C:\\src\\Notes"
+                    }
+					if ($database_schema -eq "OrderFlowApiGateway")
+                    {
+                        $CheckoutPath = "C:\\src\\OrderFlowApiGateway"
+                    }
+					if ($database_schema -eq "OrderFlowParticipant")
+                    {
+                        $CheckoutPath = "C:\\src\\OrderFlowParticipantService"
+                    }
+					if ($database_schema -eq "Questionnaire")
+                    {
+                        $CheckoutPath = "C:\\src\\Questionnaire"
+                    }
+					if ($database_schema -eq "Shop")
+                    {
+                        $CheckoutPath = "C:\\src\\Shop"
+                    }
+                    if ($database_schema -eq "BatchService")
+                    {
+                        $CheckoutPath = "C:\\src\\BatchService"
+                    }
+					if ($database_schema -eq "ProductCatalog")
+                    {
+                        $CheckoutPath = "C:\\src\\ProductCatalog"
+                    }
+                    ## Adding test database ##
+                    if ($database_schema -eq "sqlserver_datatools_testing")
+                    {
+                        $CheckoutPath = "C:\\src\\DBA_PoC_SDK_SQL_Projects"
+                    }
+                   
+
+					#remap to correct environment folder
+					$CheckoutPath=$CheckoutPath.Replace('C:\\src\\','C:\\src\\Release_repos\\'+$env.ToUpper()+'\\')
+
+                    
+                    [bool] $isContinuousDelivery = $false #for database releases set this to false; for CI, set it to true.
+
+                    [bool] $IsTag = ($strIsTag -eq 'True')
+                    $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                    [string] $username = $secretvalue.username
+                    [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                    $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+
+                    [string] $toThrow = [string]::Empty
+                    $LastExitCode = 0
+
+                    try {
+						.{
+				
+						if($env -eq "prod" -and $BranchName -like "team*" ) {
+							throw "A branch can't be deployed in PROD, only a tag!"
+						}
+
+						$release= $BranchName.Replace('team/','')
+						$release= $release.Replace('-rc','.')
+						[string] $logfile = $PWD
+						[string] $currentdatetime = Get-Date -Format "yyyyMMdd_HHmmss"
+						
+						[string] $filename=$database_schema+"_"+$env+"_"+$region+"_"+$release+"_DBDeploy_" + $currentdatetime.ToString() + ".log"
+                        $logfile = $logfile + "\\Transcripts\\"+$filename
+
+                        New-Item $logfile -Force
+
+                        DeployDatabaseVersion $configFile $env $credentials $BranchName $CheckoutPath $IsTag $isContinuousDelivery $logfile
+
+						} | Out-Null
+						
+						return $logfile
+                    }
+                    catch{
+                          $toThrow = ("Generate DB changes script step failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                          
+                          $LastExitCode = 1                     
+                      }
+                      finally{
+						.{
+                          if ($toThrow) {
+                              $toThrow | %{write-host $_; out-file -filepath $logfile -inputobject $_ -append}
+                          }
+						} | Out-Null
+						  
+						exit $LastExitCode
+                      }
+                    #########################################################################################################################################
+                ''')
+
+                archiveArtifacts artifacts: "SQLSchema/SQL/Release/${DATABASE_SCHEMA}/${REGION}/${SELECT_ENVIRONMENT}/${VERSION}*DatabaseChanges.sql", allowEmptyArchive: true , caseSensitive: false
+
+				}
+            }
+        }
+
+        stage ('CHECK: Approval') {
+            steps {
+                script {
+					if("${env.AWSENV}" == "prod"){
+						println "WAITING FOR INPUT - Request Approval"
+
+						slackSend(channel: "ds-db-jenkins", color: "good", message: "<!subteam^SOMETHING> ${DATABASE_SCHEMA} database changes deployment for `${RELEASE}` to ${SELECT_ENVIRONMENT} ${REGION} waiting for approval: https://jenkins.company-tr.com/jenkins/job/DBA_Release/job/DBA_SQLServer_Release_Schema/job/master/ ")
+						
+						def inputResponse = input(message: "Should we proceed with deploying ${DATABASE_SCHEMA} database changes for ${RELEASE} to ${SELECT_ENVIRONMENT} ${REGION}?", submitter: "user1, user2, user3", submitterParameter: 'approver', parameters:[booleanParam(defaultValue: false, description: 'Please check the box if approved', name: 'Approved')])
+						echo "Approved by $inputResponse"
+					}
+                }
+            }
+        }
+
+        stage ('DEPLOY DATABASE CHANGES') {
+            steps{
+                script {
+                FLYWAYOUTPUT=powershell(returnStdout: true, script: '''
+                    #########################################################################################################################################
+                    # Once the database changes script have been generated, and approval has been given, deploy the database changes scripton target Database
+                    #########################################################################################################################################
+					
+                    $ErrorActionPreference = 'Stop'
+                    Set-Location "C:\\src\\Database-deployment\\SQLSchema"
+
+                    . .\\GitFunctions.ps1
+                    . .\\DacPacFunctions.ps1
+                    . .\\FlywayFunctions.ps1
+                    . .\\DeployDatabaseVersions.ps1
+
+                    #The following parameters will have different values, for each Jenkins job, but will only be set once for each job in Jenkins pipeline. 
+                    [string] $secretid = $env:SECRETMANAGERID
+                    [string] $region =  $env:AWS_REGION 
+                    [string] $configFile = "$env:CONFIGFILE"
+                    [string] $env = $env:AWSENV #set to appropriate environment. current choices: dev, prod, and train for testing.
+                    [string] $BranchName = $env:RELEASE #can be a branch or a tag
+
+                    $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                    [string] $username = $secretvalue.username
+                    [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                    $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+
+                    [string] $toThrow = [string]::Empty
+                    $LastExitCode = 0
+
+                    try {
+					.{
+						[string] $logfile = $env:LOGFILE
+						$logfile =$logfile.trim()
+
+                        [string] $flywayOutput=DeployDatabaseChanges $configFile $env $credentials $BranchName $logfile
+						} | Out-Null
+						return $flywayOutput
+                    }
+                    catch{
+                          $toThrow = ("Deploy Database Changes step failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                          $LastExitCode = 1                     
+                      }
+                      finally{
+                          if ($toThrow) {
+                              $toThrow | %{write-host $_; out-file -filepath $logfile -inputobject $_ -append}
+                          }
+
+                          exit $LastExitCode
+                      }
+                    #########################################################################################################################################
+                ''')
+                }
+            }
+
+
+        }
+		
+		stage ('CDC VALIDATION') {
+			steps {
+				script {
+				def check = powershell(returnStdout: true, script: '''
+                    #########################################################################################################################################
+                    # Check for modified tables that missed the CDC refresh and force it if needed
+                    #########################################################################################################################################
+                    $ErrorActionPreference = 'Stop'
+                    Set-Location "C:\\src\\Database-deployment\\SQLSchema"
+
+                    . .\\DeployDatabaseVersions.ps1
+
+                    #The following parameters will have different values, for each Jenkins job, but will only be set once for each job in Jenkins pipeline. 
+                    [string] $secretid = $env:SECRETMANAGERID
+                    [string] $region =  $env:AWS_REGION 
+                    [string] $configFile = "$env:CONFIGFILE"
+                    [string] $env = $env:AWSENV #set to appropriate environment. current choices: dev, prod, and train for testing.
+
+                    $secretvalue = (aws secretsmanager get-secret-value --secret-id $secretid --region $region --query SecretString --output text) | ConvertFrom-Json 
+                    [string] $username = $secretvalue.username
+                    [securestring] $securePassword = ConvertTo-SecureString $secretvalue.password -AsPlainText -Force
+                    $credentials = New-Object System.Management.Automation.PSCredential ($username, $SecurePassword) 
+					
+					try{
+					
+						[string] $logfile = $env:LOGFILE
+						$logfile =$logfile.trim()
+						
+						RefreshCDC $configFile $env $credentials $logfile
+					}
+                    catch{
+                          $toThrow = ("Refresh CDC step failed: ''{0}'' Reason: ''{1}''" -f $_.Exception.Message, $_.Exception.InnerException.Message)
+                          $LastExitCode = 1                     
+                      }
+                      finally{
+                          if ($toThrow) {
+                              $toThrow | %{write-host $_; out-file -filepath $logfile -inputobject $_ -append}
+                          }
+
+                          exit $LastExitCode
+                      }
+                    #########################################################################################################################################
+					''')
+				}
+                
+			}
+		}
+
+        /*
+        stage ('RUN DATABASE DATA CHANGES JOB') {
+            steps {
+                script {
+                    
+					if(SELECT_ENVIRONMENT == 'PROD' && RELEASE != null && ISTAG != null && REGION != null && DATABASE_SCHEMA != null && DATABASE_SCHEMA != 'ClientPortal' && DATABASE_SCHEMA != 'OrderFlowParticipant'){
+                                def pipeline = 'DBA_Release/DBA_SQLServer_Release_Data/master'
+                                println("\n ${pipeline}")
+                                println "Environment: ${SELECT_ENVIRONMENT}"
+                                println "Release: ${RELEASE}"
+                                println "Using Tag: ${ISTAG}"
+                                println "Region: ${REGION}"
+                                println "Database: ${DATABASE_SCHEMA}"
+                                
+                                // This will deploy the data job
+                                if(pipeline != null){
+                                    build job: "${pipeline}", wait: false, parameters: [
+                                        string(name: 'SELECT_ENVIRONMENT', value: SELECT_ENVIRONMENT),
+                                        string(name: 'RELEASE', value: RELEASE),
+                                        booleanParam(name: 'ISTAG', value: ISTAG),
+                                        string(name: 'REGION', value: REGION),
+                                        string(name: 'DATABASE_SCHEMA', value: DATABASE_SCHEMA),
+                                        string(name: 'DEPLOYMENT_TIME', value: 'BeforeDeploy'),
+                                        string(name: 'STATUS', value: 'Rollout')
+
+                                    ]
+                                }
+
+                                slackSend(channel: SLACK_RESPONSE.threadId, color: "good", message: "${DATABASE_SCHEMA} database DATA changes for `${RELEASE}` were now triggered to ${SELECT_ENVIRONMENT} ${REGION} :tada:")
+                                SLACK_RESPONSE.addReaction('arrows_clockwise')
+                                
+                    }else {
+                        println("IT'S NOT A PROD RELEASE")
+                        println "Environment: ${SELECT_ENVIRONMENT}"
+                        println "Release: ${RELEASE}"
+                        println "Using Tag: ${ISTAG}"
+                        println "Region: ${REGION}"
+                        println "Database: ${DATABASE_SCHEMA}"
+                    } 
+                }
+            }
+        }*/
+    }
+	
+				  post {
+					failure {
+						script{
+							slackSend(channel: "ds-db-jenkins", color: "danger", message: "${DATABASE_SCHEMA} database changes deployment for `${RELEASE}` to ${SELECT_ENVIRONMENT} ${REGION} FAILED! :scream: <!subteam^SOMETHING>")
+							SLACK_RESPONSE.addReaction('red_circle')
+							
+							slackSend(channel: SLACK_RESPONSE.threadId, color: "danger", message: "${DATABASE_SCHEMA} database changes deployment for `${RELEASE}` to ${SELECT_ENVIRONMENT} ${REGION} FAILED! :scream:")
+						}
+
+					}
+					success {
+						script{
+							slackSend(channel: "ds-db-jenkins", color: "good", message: "${DATABASE_SCHEMA} database changes for `${RELEASE}` were SUCCESSFULLY deployed to ${SELECT_ENVIRONMENT} ${REGION} :tada:")
+							SLACK_RESPONSE.addReaction('large_green_circle')
+							
+							slackSend(channel: SLACK_RESPONSE.threadId, color: "good", message: FLYWAYOUTPUT)
+							slackSend(channel: SLACK_RESPONSE.threadId, color: "good", message: "${DATABASE_SCHEMA} database changes for `${RELEASE}` were SUCCESSFULLY deployed to ${SELECT_ENVIRONMENT} ${REGION} :tada:")
+						}
+					}
+					cleanup {        
+						cleanWs(
+							deleteDirs: true,
+							notFailBuild: true,
+						)
+					}
+				} 		
+
+
+    
+}
