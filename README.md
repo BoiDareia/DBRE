@@ -58,9 +58,9 @@ Here are a few highlights from my work. You can find more in the repositories ta
 
 | Project Name  | Description                                                              | Technologies Used                     | Link                                            |
 | ------------- | ------------------------------------------------------------------------ | ------------------------------------- | ----------------------------------------------- |
-| **Database Deploys** | This project aims to automate database deploys end to end.    | `Octopus`, `Flyway`, `GitHub Actions`, `PowerShell`, `Python`   | [Link to Repo](https://github.com/BoiDareia/DBRE/blob/main/octopus-deploys/src/octopus-deploy) |
-| **RedShift Maintenance** | This project accomplishes the daily maintenance (vacuuming and analyzing) for Redshift.    | `Octopus`, `Python`    | [Link to Repo](https://github.com/BoiDareia/DBRE/blob/main/octopus-deploys/scripts/python/redshift-daily-maintenance.md) |
-| **Sql Fluff Linting** | This impacts the way we manage our code by applying rules directly into Git.    | `GitHub Actions`, `SQL Fluff`     | [Link to Repo](https://github.com/BoiDareia/DBRE/blob/main/octopus-deploys/.github/workflows/sql-code-linting.md) |
+| **Database Deploys** | This project aims to automate database deploys end to end.    | `Octopus`, `Flyway`, `GitHub Actions`, `PowerShell`, `Python`   | [Link to Repo](https://github.com/BoiDareia/DBRE/tree/main/src/octopus) |
+| **RedShift Maintenance** | This project accomplishes the daily maintenance (vacuuming and analyzing) for Redshift.    | `Octopus`, `Python`    | [Link to Repo](https://github.com/BoiDareia/DBRE/blob/main/scripts/python/redshift-daily-maintenance.md) |
+| **Sql Fluff Linting** | This impacts the way we manage our code by applying rules directly into Git.    | `GitHub Actions`, `SQL Fluff`     | [Link to Repo](https://github.com/BoiDareia/DBRE/blob/main/.github/workflows/sql-code-linting.md) |
 
 ### My Philosophy on Database Reliability
 
