@@ -1,0 +1,72 @@
+name: Create DB Ticket
+description: |
+  Create a Jira ticket for DB changes in a PR
+
+inputs:
+  github-repository:
+    required: true
+    type: string
+  GITHUB_TOKEN:
+    description: GitHub token for authentication
+    required: true
+    type: string
+  head-ref:
+    required: true
+    type: string
+  JIRA_TOKEN_DB:
+    description: Jira token for authentication
+    required: true
+    type: string
+  pr-number:
+    required: true
+    type: string
+  pr-url:
+    required: true
+    type: string
+  repo-name:
+    required: true
+    type: string
+  sql-files-altered:
+    required: true
+    type: string
+  sql-files-list:
+    required: true
+    type: string
+
+outputs:
+  jira_action:
+    description: Action taken - created/commented
+    value: ${{ steps.ticket_creation.outputs.jira_action }}
+  jira_ticket_link:
+    description: Link to the created Jira ticket
+    value: ${{ steps.ticket_creation.outputs.jira_ticket_link}}
+
+runs:
+  using: "composite"
+  steps:
+    - id: ticket_creation
+      env:
+        GITHUB_REPOSITORY: ${{ inputs.github-repository }}
+        JIRA_TOKEN_DB: ${{ inputs.JIRA_TOKEN_DB }}
+        PR_URL: ${{ inputs.pr-url }}
+        REPO_NAME: ${{ inputs.repo-name }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        SQL_DIFFS: ${{ inputs.sql-files-altered }}
+        SQL_FILES: ${{ inputs.sql-files-list }}
+
+      run: |
+        python -m pip install requests   #Install necessary packages
+        python ${{ github.action_path }}/create_db_ticket.py
+
+      shell: bash
+
+    - id: pr_comment
+      if: ${{ steps.ticket_creation.outputs.jira_action == 'created'}}
+      env:
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        TICKET_URL: ${{ steps.ticket_creation.outputs.jira_ticket_link }}
+      run: |
+        gh pr comment $PR_NUMBER --body "A database ticket has been created for this PR. Ticket Link - $TICKET_URL"
+
+      shell: bash

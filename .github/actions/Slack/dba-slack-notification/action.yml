@@ -1,0 +1,73 @@
+name: Slack Notification
+description: |
+  Comment DB ticket link on PR and notify in Slack channel
+
+inputs:
+  message_form:
+    description: What type of message to send
+    required: true
+    type: string
+  pr-number:
+    required: false
+    type: string
+  repo-name:
+    required: false
+    type: string
+  SLACK_BOT_TOKEN:
+    description: Slack Bot Token for authentication
+    required: true
+    type: string
+  ticket_url:
+    required: false
+    type: string
+  user:
+    description: User who initiated the request (for review_requested)
+    required: false
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+    - id: message_setting
+      run: |
+        echo "Preparing to send Slack notification for form: ${{ inputs.message_form }}"
+        if [ "${{ inputs.message_form }}" == "pr_created" ]; 
+        then
+          echo "header_text=DBA review requested for ${{ inputs.repo-name }}: PR ${{ inputs.pr-number }} - please review" >> $GITHUB_OUTPUT
+        elif [ "${{ inputs.message_form }}" == "review_requested" ];
+        then
+          echo "header_text=PR review requested by ${{ inputs.user }}" >> $GITHUB_OUTPUT
+        else
+          echo "Error: Invalid message_form input. Must be 'pr_created' or 'review_requested'."
+          exit 1
+        fi
+      shell: bash
+    - id: slack_notification_send
+      uses: slackapi/slack-github-action@v2.0.0
+      with:
+        method: chat.postMessage
+        token: ${{ inputs.SLACK_BOT_TOKEN }}
+        payload: |
+          channel: "C01DCSSFZ9D"
+          text: "DBA review requested for ${{ inputs.repo-name }}"
+
+          blocks:
+            - type: header
+              text:
+                type: plain_text
+                text: "${{ steps.message_setting.outputs.header_text }}"
+              
+            - type: divider
+            
+            - type: section
+              text:
+                type: mrkdwn
+                text: "<!subteam^S0237SE67> Please review the DB ticket for relevant PR information"
+            - type: actions
+              elements:
+                - type: button
+                  text:
+                    type: plain_text
+                    text: "DB Ticket"
+                    emoji: true
+                  url: "${{ inputs.ticket_url }}"

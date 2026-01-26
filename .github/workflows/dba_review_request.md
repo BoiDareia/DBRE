@@ -1,133 +1,81 @@
-GitHub Action: Send DBA Review Request
-======================================
+DBA Review Request Automation
+=============================
 
-This GitHub Actions workflow automates the process of notifying the Database Administration (DBA) team on Slack when a review is requested on a pull request. It's triggered by a specific comment, fetches a related Jira ticket, and then constructs a rich, interactive notification in a designated Slack channel.
+This repository contains the GitHub Actions workflows designed to enable "ChatOps" for Database Administration. It allows developers to request a DBA review directly from a Pull Request comment, which then validates existing Jira tickets and notifies the DBA team via Slack.
 
-workflow Overview
+📂 Workflow Files
 -----------------
 
-The workflow is named `Send DBA Review Request` and is designed to streamline communication between developers and the DBA team.
+| **File** | **Type** | **Description** |
+| --- | --- | --- |
+| `dba_review_request.yml` | **Trigger Workflow** | Monitors PR comments for a specific "magic phrase" and extracts the necessary user and PR metadata. |
+| `dba_review_request_general.yml` | **Reusable Workflow** | The logic handler. It looks up the associated Jira ticket and sends a Slack notification to the DBA channel. |
 
--   **Trigger**: The workflow runs whenever a **comment is made on an issue** (which includes pull requests) within the repository.
+🚀 Usage & Trigger
+------------------
 
--   **Condition**: It only proceeds if the comment is on a pull request and contains the specific trigger phrase: `@company/dba review requested`.
+This automation is designed to be triggered by an **Issue Comment** (Pull Request comment).
 
--   **Action**: It finds the associated Jira ticket for the PR and sends a notification to a Slack channel, tagging the DBA user group and providing a direct button to the ticket.
+### 1\. The Trigger Phrase
 
-* * * * *
+The workflow listens specifically for comments on Pull Requests that contain the following mention:
 
-⚙️ Jobs
--------
+> `@Company/dba review requested`
 
-The workflow consists of two sequential jobs: `get_ticket_info` and `slack-notification-send`.
+### 2\. Execution Logic
 
-### 1\. Job: `get_ticket_info`
+1.  **Validation:** The `variable-set` job ensures the event is a Pull Request and the comment body contains the required phrase.
 
-This job is responsible for retrieving the URL of the Jira ticket associated with the pull request.
+2.  **Data Extraction:** The workflow captures the repository name, the PR URL, and the username of the person requesting the review.
 
--   **Condition**: Runs only if the trigger comment is on a PR and contains `@company/dba review requested`.
+3.  **Ticket Lookup:** The reusable workflow attempts to retrieve an existing DB Ticket URL using the `DBRE/.github/actions/Jira/retrieve-db-ticket` action.
 
--   **Runner**: Executes on an `ubuntu-latest` virtual machine.
+4.  **Notification:**
 
--   **Output**: Produces an output named `jira_ticket_url`, which contains the link to the Jira ticket. This output is then used by the next job.
+    -   **Condition:** A Slack notification is sent **only if** a valid Jira ticket link is found (`outputs.jira_ticket_link != ''`).
 
-#### Steps:
+    -   **Destination:** The notification is sent to the configured DBA Slack channel using the `review_requested` message format.
 
-1.  **Checkout Code**:
+🛠 Setup & Configuration
+------------------------
 
-    YAML
+### Enabling the Trigger
 
-    ```
-    - id: repoCheckout
-      uses: actions/checkout@v4
+By default, the `issue_comment` trigger is commented out in `dba_review_request.yml`. To enable the ChatOps functionality, you must uncomment the following lines:
 
-    ```
+YAML
 
-    Checks out the repository's code so that the workflow can access local files, such as the Python script.
+```
+on:
+  # workflow_dispatch # Optional: keep for testing
+  issue_comment:      # Uncomment this to enable comment monitoring
 
-2.  **Setup Python**:
+```
 
-    YAML
+### Inputs
 
-    ```
-    - id: setup_python
-      uses: actions/setup-python@v5
+The reusable workflow requires the following inputs, which are passed automatically by the trigger workflow:
 
-    ```
+-   `github-repository`: The full name of the repository.
 
-    Initializes a Python 3.x environment for the script to run in.
+-   `pr-url`: The HTML URL of the Pull Request.
 
-3.  **Get Ticket URL**:
+-   `user`: The login ID of the user triggering the request.
 
-    YAML
+### Secrets
 
-    ```
-    - id: get_ticket_url
-      run: |
-        pip install requests
-        python .github/actions/get_ticket_url.py
+The following secrets must be inherited or present in the repository settings for the external actions to function:
 
-    ```
+| **Secret** | **Description** |
+| --- | --- |
+| `JIRA_TOKEN_DB` | Required to search Jira for the existing database ticket. |
+| `SLACK_BOT_TOKEN` | Required to authenticate with the Slack API to send the notification. |
 
-    This is the core step. It first installs the `requests` library and then executes the Python script located at `.github/actions/get_ticket_url.py`. This script contains the logic to interact with the GitHub and Jira APIs to find the correct ticket URL. It uses several secrets and context variables:
+📦 Dependencies
+---------------
 
-    -   `GITHUB_TOKEN`: An automatically generated token to authenticate with the GitHub API.
+This automation relies on the following custom actions from the `DBRE` organization:
 
-    -   `JIRA_TOKEN_DB`: A secret token for authenticating with the Jira API.
+1.  `DBRE/.github/actions/Jira/retrieve-db-ticket@main`
 
-    -   `REPO_NAME`: The name of the current repository.
-
-    -   `PR_URL`: The URL of the pull request that triggered the workflow.
-
-* * * * *
-
-### 2\. Job: `slack-notification-send`
-
-This job takes the Jira ticket URL from the previous job and sends the notification to Slack.
-
--   **Dependency**: It `needs` the `get_ticket_info` job to complete successfully before it can run.
-
--   **Condition**: It only runs if the `jira_ticket_url` output from the previous job is not empty, ensuring a notification is only sent if a ticket was found.
-
--   **Runner**: Executes on an `ubuntu-latest` virtual machine.
-
-#### Steps:
-
-1.  **Send Slack Message**:
-
-    YAML
-
-    ```
-    - id: dba_review_request
-      uses: slackapi/slack-github-action@v2.0.0
-
-    ```
-
-    This step uses the official `slack-github-action` to send a message. The `with` block configures the message content and appearance using Slack's Block Kit API.
-
-    **Payload Details**:
-
-    -   `channel`: The message is sent to a specific channel ID (`G01CA414DPH`).
-
-    -   `text`: A fallback text message for notifications that can't render blocks.
-
-    -   `blocks`: A JSON structure that defines a rich, interactive message.
-
-        -   **Header**: Displays who requested the review (e.g., `PR review requested by octocat`).
-
-        -   **Divider**: A visual separator.
-
-        -   **Section**: The main body of the message, which mentions the DBA subteam (`<!subteam^SOMETHING>`) to trigger a notification for that group.
-
-        -   **Actions**: Contains interactive elements. In this case, it's a **button** labeled "DB Ticket" that links directly to the Jira ticket URL retrieved by the first job.
-
-* * * * *
-
-🔑 Required Secrets
--------------------
-
-To function correctly, this workflow requires the following secrets to be configured in the repository's settings (`Settings > Secrets and variables > Actions`):
-
--   `JIRA_TOKEN_DB`: An API token with permissions to read from your Jira project.
-
--   `SLACK_BOT_TOKEN`: A Slack Bot token with `chat:write` permissions for the specified channel.
+2.  `DBRE/.github/actions/Slack/dba-slack-notification@main`

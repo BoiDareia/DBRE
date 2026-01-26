@@ -1,0 +1,59 @@
+name: Create DB Project Ticket
+
+on:
+    workflow_call:
+        inputs:
+            github-repository:
+                required: true
+                type: string
+            head-ref:
+                required: true
+                type: string
+            pr-url:
+                required: true
+                type: string
+            repo-name:
+                required: true
+                type: string
+            sql-files-altered:
+                required: true
+                type: string
+            sql-files-list:
+                required: true
+                type: string
+
+jobs:
+    create-db-ticket:
+        if: ${{ inputs.sql-files-altered > 0 }}
+        runs-on: ubuntu-latest
+        outputs:
+            jira_action: ${{ steps.ticket_creation.outputs.jira_action }}
+            jira_ticket_link: ${{ steps.ticket_creation.outputs.jira_ticket_link }}
+        steps:
+            - id: repoCheckout
+              uses: actions/checkout@v4
+
+            - name: Create or Comment on Jira Ticket
+              id: ticket_creation
+              uses: DBRE/.github/actions/Jira/db-ticket-create@main
+              with:
+                  github-repository: ${{ inputs.github-repository }}
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  head-ref: ${{ inputs.head-ref }}
+                  pr-number: ${{ github.event.pull_request.number }}
+                  pr-url: ${{ inputs.pr-url }}
+                  repo-name: ${{ inputs.repo-name }}
+                  sql-files-altered: ${{ inputs.sql-files-altered }}
+                  sql-files-list: ${{ inputs.sql-files-list }}
+                  JIRA_TOKEN_DB: ${{ secrets.JIRA_TOKEN_DB }}
+
+            - name: Send Slack Notification to DBA Channel
+              id: slack_notification_send
+              if: ${{ steps.ticket_creation.outputs.jira_action == 'created'}}
+              uses: DBRE/.github/actions/Slack/dba-slack-notification@main
+              with:
+                  message_form: "pr_created"
+                  pr-number: ${{ github.event.pull_request.number }}
+                  repo-name: ${{ inputs.repo-name }}
+                  SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+                  ticket_url: ${{ steps.ticket_creation.outputs.jira_ticket_link }}
