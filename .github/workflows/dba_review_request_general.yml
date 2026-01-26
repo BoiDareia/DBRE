@@ -24,7 +24,7 @@ jobs:
 
             - name: Retrieve DB Ticket URL
               id: get_ticket_url
-              uses: ./.github/actions/Jira/retrieve-db-ticket@main
+              uses: ./.github/actions/Jira/retrieve-db-ticket
               with:
                   JIRA_TOKEN_DB: ${{ secrets.JIRA_TOKEN_DB }}
                   github-repository: ${{ inputs.github-repository}}
@@ -33,7 +33,7 @@ jobs:
             - name: Send Slack Notification to DBA Channel
               id: slack_notification_send
               if: ${{ steps.get_ticket_url.outputs.jira_ticket_link != '' }}
-              uses: ./.github/actions/Slack/dba-slack-notification@main
+              uses: ./.github/actions/Slack/dba-slack-notification
               with:
                   message_form: "review_requested"
                   pr-number: ${{ github.event.pull_request.number }}

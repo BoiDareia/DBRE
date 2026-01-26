@@ -24,7 +24,7 @@ jobs:
 
   dba_review_request:
     needs: variable-set
-    uses: ./.github/workflows/dba_review_request_general.yml@main
+    uses: ./.github/workflows/dba_review_request_general.yml
     with:
       github-repository: ${{ needs.variable-set.outputs.github-repository }}
       pr-url: ${{ needs.variable-set.outputs.pr-url }}
