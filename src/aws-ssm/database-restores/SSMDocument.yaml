@@ -1,0 +1,143 @@
+schemaVersion: "0.3"
+description: Database Migration Runbook - Downloads and runs SSMMigration.ps1 from S3 to restores DBs on each EC2 Instance
+parameters:
+  InstanceId:
+    type: String
+    description: The target Instance ID (e.g. i-0abcdef12345)
+  SecretName:
+    type: String
+    description: AWS Secrets Manager secret name for SQL credentials
+    default: dba-creds
+  ScriptBucket:
+    type: String
+    description: S3 bucket containing the script
+    default: data-bucket-2026
+  ScriptKey:
+    type: String
+    description: S3 key (path) to the script
+    default: src/SSMMigration.ps1
+  SkipHealthChecks:
+    type: String
+    allowedValues:
+      - "true"
+      - "false"
+    description: Skip DBCC CHECKDB health checks
+    default: "false"
+mainSteps:
+  - name: GetInstanceName
+    action: aws:executeAwsApi
+    nextStep: RunMigrationScript
+    isEnd: false
+    inputs:
+      Service: ec2
+      Api: DescribeTags
+      Filters:
+        - Name: resource-id
+          Values:
+            - "{{ InstanceId }}"
+        - Name: key
+          Values:
+            - Name
+    outputs:
+      - Name: ResolvedName
+        Selector: $.Tags[0].Value
+        Type: String
+  - description: Execute the database migration script
+    name: RunMigrationScript
+    action: aws:runCommand
+    isEnd: true
+    inputs:
+      DocumentName: AWS-RunPowerShellScript
+      InstanceIds:
+        - "{{ InstanceId }}"
+      Parameters:
+        commands:
+          - |
+            # ----------------------------------------------------------------
+            # PHASE 1: BOOTSTRAP (Runs in Windows PowerShell 5.1)
+            # ----------------------------------------------------------------
+
+            # 1. Set TLS 1.2 (Crucial for the download in 5.1)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+            # 2. Install PowerShell 7 if missing
+            if (-not (Get-Command "pwsh" -ErrorAction SilentlyContinue)) {
+                Write-Output "PowerShell 7 not found. Installing..."
+                $InstallScriptUrl = "https://aka.ms/install-powershell.ps1"
+                Invoke-Expression "& { $(Invoke-RestMethod $InstallScriptUrl) } -UseMSI -Quiet"
+                
+                # Refresh Path so we can find pwsh.exe immediately
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            }
+
+            # ----------------------------------------------------------------
+            # PHASE 2: HANDOVER (Everything below runs in PowerShell Core)
+            # ----------------------------------------------------------------
+
+            # We define the Core script inside a Single-Quoted Here-String.
+            # SSM will replace {DoubleHandlebars} text before this runs, 
+            # but Windows PowerShell will treat $variables as literal text to be written to the file.
+
+            $CoreScriptContent = @'
+
+                Write-Output "Running in: $($PSVersionTable.PSVersion)"
+
+                # A. Set the script parameters (Now happening inside Core)
+                $params = @{
+                    InstanceName = '{{GetInstanceName.ResolvedName}}'
+                    BucketName   = '{{ScriptBucket}}'
+                    SecretName = '{{SecretName}}'
+                    SkipHealthChecks = '{{SkipHealthChecks}}'
+                }
+
+                # Handle SecretName
+                if ('{{SecretName}}' -ne 'dba-creds') {
+                    $params['SecretName'] = '{{SecretName}}'
+                }
+
+                # Handle SkipHealthChecks (FIXED)
+                # We check the string value, then explicitly set the Boolean $true
+                if ('{{SkipHealthChecks}}' -match 'true') {
+                    Write-Output "Skipping Health Checks..."
+                    $params['SkipHealthChecks'] = $true
+                }
+                if ('{{SkipHealthChecks}}' -match 'false') {
+                    Write-Output "Will NOT Skip Health Checks..."
+                    $params['SkipHealthChecks'] = $false
+                }
+                
+                # B. Install/Import Necessary Tools (Modules must be installed specifically for Core)
+                # Install required modules
+                $modules = @('dbatools', 'AWS.Tools.SecretsManager', 'AWS.Tools.Common', 'AWS.Tools.S3')
+                foreach ($module in $modules) {
+                    if (-not (Get-Module -ListAvailable -Name $module)) {
+                        Install-Module -Name $module -Force -Scope AllUsers -ErrorAction Stop
+                    }
+                    Import-Module $module -ErrorAction Stop
+                }
+                
+                # C. Download the script
+                $localPath = 'C:\temp\SSMMigration.ps1'
+                Read-S3Object -BucketName '{{ScriptBucket}}' -Key '{{ScriptKey}}' -File $localPath
+                
+                if (-not (Test-Path $localPath)) {
+                    throw "Failed to download script to $localPath"
+                }
+                
+                # D. Run the final command
+                Write-Output "Launching Restore Script in PowerShell Core..."
+                & $localPath @params
+                
+            '@ 
+
+            # ----------------------------------------------------------------
+            # PHASE 3: EXECUTION
+            # ----------------------------------------------------------------
+
+            # Save the Core logic to a temporary file
+            $WrapperFile = "C:\temp\RunInCore.ps1"
+            Set-Content -Path $WrapperFile -Value $CoreScriptContent -Encoding UTF8
+
+            # Execute the file using pwsh.exe
+            Write-Output "Handing over execution to PowerShell 7..."
+            pwsh.exe -ExecutionPolicy Bypass -File $WrapperFile
