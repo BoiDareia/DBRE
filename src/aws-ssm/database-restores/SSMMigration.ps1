@@ -45,9 +45,19 @@ try {
 
     # Setup variables
     $localDestination = "Z:\$InstanceName"
-    switch ($ActiveDirectory) {
-        "AD1" { $s3_gateway_ip = "100.55.6.22" }
-        "AD2" { $s3_gateway_ip = "100.57.4.42" }
+    
+    # Construct the parameter name based on the $ActiveDirectory variable
+    # And implies having SSM Parameters like /storage-gateway/dmzmgmt_ip in Parameter Store
+    $parameterName = "/storage-gateway/$($ActiveDirectory.ToLower())_ip"
+
+    try {
+        # Fetch the IP dynamically from SSM Parameter Store
+        $s3_gateway_ip = (Get-SSMParameterValue -Name $parameterName).Value
+        Write-Output "Successfully retrieved IP: $s3_gateway_ip"
+    }
+    catch {
+        Write-Error "Failed to retrieve IP from Parameter Store for path: $parameterName"
+        exit 1
     }
 
     # Retrieve credentials from AWS Secrets Manager
