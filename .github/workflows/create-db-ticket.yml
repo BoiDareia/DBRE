@@ -54,7 +54,7 @@ jobs:
 
   create-db-ticket:
     needs: sql-file-check
-    uses: DBRE/.github/workflows/create_db_ticket_general.yml@main
+    uses: ./.github/workflows/create_db_ticket_general.yml@main
     with:
       github-repository: ${{ needs.sql-file-check.outputs.github-repository }}
       head-ref: ${{ needs.sql-file-check.outputs.head-ref }}

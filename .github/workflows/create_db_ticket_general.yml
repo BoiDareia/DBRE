@@ -35,7 +35,7 @@ jobs:
 
             - name: Create or Comment on Jira Ticket
               id: ticket_creation
-              uses: DBRE/.github/actions/Jira/db-ticket-create@main
+              uses: ./.github/actions/Jira/db-ticket-create@main
               with:
                   github-repository: ${{ inputs.github-repository }}
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,7 +50,7 @@ jobs:
             - name: Send Slack Notification to DBA Channel
               id: slack_notification_send
               if: ${{ steps.ticket_creation.outputs.jira_action == 'created'}}
-              uses: DBRE/.github/actions/Slack/dba-slack-notification@main
+              uses: ./.github/actions/Slack/dba-slack-notification@main
               with:
                   message_form: "pr_created"
                   pr-number: ${{ github.event.pull_request.number }}
