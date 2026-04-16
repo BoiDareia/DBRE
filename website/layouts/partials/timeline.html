@@ -1,0 +1,24 @@
+{{/* Timeline section — Professional Path */}}
+<section id="experience" class="py-16 sm:py-20 md:py-28">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+
+    {{/* Section heading */}}
+    <h2 class="text-white font-heading text-3xl sm:text-4xl md:text-5xl font-bold text-center mb-12 md:mb-16">
+      Professional Path
+    </h2>
+
+    {{/* Timeline container */}}
+    <div class="relative">
+
+      {{/* Vertical connecting line — centered on md+, left-aligned on mobile */}}
+      <div class="absolute top-0 bottom-0 left-4 md:left-1/2 w-0.5 bg-slate-700 md:-translate-x-px" aria-hidden="true"></div>
+
+      {{/* Render experience entries sorted by weight */}}
+      {{ $entries := sort (where .Site.RegularPages "Section" "experience") "Weight" }}
+      {{ range $index, $entry := $entries }}
+        {{ partial "timeline-entry.html" (dict "entry" $entry "index" $index) }}
+      {{ end }}
+
+    </div>
+  </div>
+</section>

@@ -1,0 +1,34 @@
+{{ define "main" }}
+<section class="flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8 py-16 sm:py-20 md:py-28">
+
+  {{/* Proper Grumpy DBA image */}}
+  <img
+    src="/images/foto-1.png"
+    alt="Proper Grumpy DBA action figure at computer"
+    class="w-48 sm:w-56 md:w-72 max-w-full h-auto rounded-lg mb-8"
+    loading="lazy"
+  />
+
+  {{/* 404 heading */}}
+  <h1 class="text-white font-heading text-5xl sm:text-6xl md:text-7xl font-black tracking-tight mb-4">
+    404
+  </h1>
+
+  {{/* Humorous desenrasca error message */}}
+  <p class="text-amber-600 font-semibold text-lg sm:text-xl md:text-2xl max-w-xl mb-4">
+    Even desenrascanço has its limits.
+  </p>
+  <p class="text-slate-300 text-base sm:text-lg max-w-lg mb-10 leading-relaxed">
+    This page wandered off like a query without a WHERE clause. The Proper Grumpy DBA is not amused.
+  </p>
+
+  {{/* Back to Homepage button */}}
+  <a
+    href="/"
+    class="inline-block px-8 py-4 min-h-11 min-w-11 bg-amber-600 hover:bg-amber-500 text-slate-900 font-bold text-lg rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-900"
+  >
+    Back to Homepage
+  </a>
+
+</section>
+{{ end }}

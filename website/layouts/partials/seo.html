@@ -1,0 +1,30 @@
+{{/* SEO meta tags: OpenGraph, Twitter Card, canonical URL, meta description */}}
+
+{{- $title := .Title | default .Site.Title -}}
+{{- $description := .Params.description | default .Site.Params.description -}}
+
+{{/* Meta description */}}
+{{ with $description }}
+<meta name="description" content="{{ . }}">
+{{ end }}
+
+{{/* Canonical URL */}}
+<link rel="canonical" href="{{ .Permalink }}">
+
+{{/* OpenGraph meta tags */}}
+<meta property="og:title" content="{{ $title }}">
+{{ with $description }}
+<meta property="og:description" content="{{ . }}">
+{{ end }}
+{{ with .Site.Params.ogImage }}
+<meta property="og:image" content="{{ . | absURL }}">
+{{ end }}
+<meta property="og:url" content="{{ .Permalink }}">
+<meta property="og:type" content="website">
+
+{{/* Twitter Card meta tags */}}
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ $title }}">
+{{ with $description }}
+<meta name="twitter:description" content="{{ . }}">
+{{ end }}
