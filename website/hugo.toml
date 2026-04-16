@@ -1,0 +1,19 @@
+baseURL = "https://www.makitall.com/"
+languageCode = "en"
+title = "Makitall — Sérgio Gonçalves | DBRE"
+enableRobotsTXT = true
+
+[params]
+  description = "Database Reliability Engineer. The Portuguese desenrasca approach to data infrastructure."
+  author = "Sérgio Gonçalves"
+  linkedin = "https://www.linkedin.com/in/sergioagoncalves"
+  github = "https://github.com/BoiDareia"
+  email = "sergioapg@gmail.com"
+  ogImage = "images/Logo.png"
+
+[sitemap]
+  changefreq = "monthly"
+  filename = "sitemap.xml"
+
+[outputs]
+  home = ["HTML", "RSS"]
