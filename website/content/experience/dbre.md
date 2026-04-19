@@ -1,10 +1,9 @@
 ---
-title: "Full-Blown DBRE"
-date: 2019-01-01
+title: "Database Reliability Engineer"
+date: 2019-08-01
 endDate: "Present"
+company: "DefinedAI · FuzeHealth"
 weight: 4
 ---
 
-The destination where every previous chapter converges. Database Reliability Engineering is the art of keeping data infrastructure running smoothly at scale — from query performance tuning and replication topology to disaster recovery and capacity planning.
-
-The journey from the handball court to the DBRE console is a story of desenrasca in action: the pressure of competition, the grit of sysadmin firefighting, and the strategic thinking of infrastructure design all feed into making databases reliable, observable, and resilient. This is where the "Proper Grumpy DBA" earns the title — by getting it done, no matter what.
+Where every previous chapter converges. From SQL Server and Azure SQL HA/DR architecture with SRE practices at DefinedAI, to managing AWS RDS, Aurora, and Redshift fleets at FuzeHealth. CI/CD automation with Jenkins and GitHub Actions, cloud database strategy, DMS migrations, and day-to-day operations of enterprise-level production databases in the cloud.

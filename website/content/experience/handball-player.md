@@ -7,6 +7,4 @@ weight: 1
 image: "/images/foto-2.png"
 ---
 
-Operating under extreme pressure on the court translates directly to incident response and managing mission-critical databases. Split-second decisions during a match mirror the urgency of a production outage — there is no pause button, only the next play.
-
-The desenrasca mentality — adapt, improvise, and get it done — was forged here. Years of competitive handball taught discipline, teamwork under fire, and the ability to stay calm when everything is on the line. These are the same instincts that kick in at 3 a.m. when a primary database cluster decides it has had enough.
+Competitive handball at a high level — discipline, teamwork under fire, and split-second decisions under extreme pressure. The desenrasca mentality was forged here: adapt, improvise, get it done. These instincts translate directly to incident response and managing production outages at 3 a.m.

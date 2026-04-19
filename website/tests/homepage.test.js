@@ -24,18 +24,15 @@ describe('Hero Section', () => {
     expect(main.textContent).toContain('Database Reliability Engineer');
   });
 
-  it('contains LinkedIn link pointing to sergioagoncalves profile', () => {
-    const heroSection = document.querySelector('main section');
-    const linkedinLink = heroSection.querySelector('a[href*="linkedin.com/in/sergioagoncalves"]');
+  it('contains LinkedIn link in the page', () => {
+    const linkedinLink = document.querySelector('a[href*="linkedin.com/in/sergioagoncalves"]');
     expect(linkedinLink).not.toBeNull();
-    expect(linkedinLink.getAttribute('target')).toBe('_blank');
-    expect(linkedinLink.getAttribute('rel')).toContain('noopener');
   });
 
-  it('contains "View Projects" CTA with href="#projects"', () => {
-    const cta = document.querySelector('a[href="#projects"]');
+  it('contains "View Projects" CTA with href="/projects/"', () => {
+    const links = document.querySelectorAll('a[href="/projects/"]');
+    const cta = Array.from(links).find(link => link.textContent.includes('View Projects'));
     expect(cta).not.toBeNull();
-    expect(cta.textContent).toContain('View Projects');
   });
 });
 

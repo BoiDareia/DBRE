@@ -10,5 +10,41 @@
       {{ block "main" . }}{{ end }}
     </main>
     {{ partial "footer.html" . }}
+    <script>
+      // Mobile navigation toggle
+      (function() {
+        var toggle = document.getElementById('nav-toggle');
+        var menu = document.getElementById('nav-mobile-menu');
+        if (toggle && menu) {
+          toggle.addEventListener('click', function() {
+            var expanded = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!expanded));
+            menu.classList.toggle('hidden');
+          });
+          // Close mobile menu when a link is clicked
+          menu.querySelectorAll('a').forEach(function(link) {
+            link.addEventListener('click', function() {
+              menu.classList.add('hidden');
+              toggle.setAttribute('aria-expanded', 'false');
+            });
+          });
+        }
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"], a[href^="/#"]').forEach(function(anchor) {
+          anchor.addEventListener('click', function(e) {
+            var href = this.getAttribute('href');
+            var hash = href.indexOf('#') !== -1 ? href.substring(href.indexOf('#')) : null;
+            if (hash) {
+              var target = document.querySelector(hash);
+              if (target) {
+                e.preventDefault();
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                history.pushState(null, null, hash);
+              }
+            }
+          });
+        });
+      })();
+    </script>
   </body>
 </html>

@@ -1,10 +1,9 @@
 ---
-title: "Sysadmin"
-date: 2012-01-01
-endDate: "2015"
+title: "IT Development & Consulting"
+date: 2007-05-01
+endDate: "2014"
+company: "Teleperformance · Novabase · Connecta Group"
 weight: 2
 ---
 
-The first step into IT — learning the ropes by keeping systems alive and users happy. From racking servers to writing shell scripts that saved hours of manual work, this was where the desenrasca mindset met the command line.
-
-Every broken print queue and mysterious network outage was a lesson in troubleshooting under pressure. The adaptability built on the handball court found a new arena: production environments that never sleep and users who always need things fixed yesterday.
+From developing inbound/outbound campaigns and migrating Informix to SQL Server at Teleperformance, to implementing and supporting WinLib/WeCul products at Novabase, to automating internal processes at Connecta Group. Software development in VB.NET and PHP, SQL Server administration, and direct client interaction across customer service and IT consulting sectors.
