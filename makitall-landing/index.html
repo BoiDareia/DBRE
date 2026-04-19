@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Makitall</title>
+  <meta name="description" content="Makitall — Desenrascanço, the art of figuring it out." />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 2rem;
+      background-color: #1e293b;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    .logo-container {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 1s ease-out;
+    }
+    .logo-container img {
+      max-width: 280px;
+      width: 100%;
+      height: auto;
+    }
+    .tagline {
+      color: #d97706;
+      font-size: 1.125rem;
+      font-weight: 600;
+      text-align: center;
+      letter-spacing: 0.02em;
+      animation: fadeIn 1.5s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="logo-container">
+    <img src="/images/Logo.png" alt="Makitall logo" />
+  </div>
+  <p class="tagline">Desenrascanço — the art of figuring it out, no matter what.</p>
+</body>
+</html>

@@ -1,10 +1,22 @@
 {{/* Project card partial — single project entry */}}
-<article class="break-inside-avoid mb-6 bg-slate-800 rounded-lg border-2 border-transparent hover:border-amber-600 transition-colors p-6">
+<article class="break-inside-avoid mb-6 group bg-slate-800 rounded-lg border-2 border-slate-700/50 hover:border-amber-600 transition-all duration-300 p-6 hover:shadow-lg hover:shadow-amber-600/5">
+
+  {{/* Role badge — optional */}}
+  {{ with .Params.role }}
+    <span class="inline-block px-3 py-1 text-xs font-mono font-medium text-amber-600 bg-slate-900 rounded-full mb-3">
+      {{ . }}
+    </span>
+  {{ end }}
 
   {{/* Title — h3 for proper heading hierarchy under h2 */}}
-  <h3 class="text-white font-heading text-xl sm:text-2xl font-bold mb-3">
+  <h3 class="text-white font-heading text-xl sm:text-2xl font-bold mb-1 group-hover:text-amber-600 transition-colors">
     {{ .Title }}
   </h3>
+
+  {{/* Period — optional */}}
+  {{ with .Params.period }}
+    <p class="text-slate-400 text-sm font-mono mb-3">{{ . }}</p>
+  {{ end }}
 
   {{/* Summary description */}}
   {{ with .Params.summary }}
@@ -17,20 +29,20 @@
   {{ with .Params.tags }}
     <div class="flex flex-wrap gap-2 mb-4" aria-label="Technologies used">
       {{ range . }}
-        <span class="inline-block px-3 py-1 text-xs sm:text-sm font-mono font-medium text-amber-600 bg-slate-900 rounded-full">
+        <span class="inline-block px-3 py-1 text-xs sm:text-sm font-mono font-medium text-amber-600/80 bg-slate-900/80 rounded-full border border-slate-700/50 transition-colors group-hover:border-amber-600/30">
           {{ . }}
         </span>
       {{ end }}
     </div>
   {{ end }}
 
-  {{/* Optional external link */}}
+  {{/* Optional external link — styled button */}}
   {{ with .Params.link }}
     <a
       href="{{ . }}"
       target="_blank"
       rel="noopener noreferrer"
-      class="inline-flex items-center gap-1 min-h-11 min-w-11 text-amber-600 hover:text-amber-500 font-semibold text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-800"
+      class="inline-flex items-center gap-2 min-h-11 min-w-11 px-4 py-2 text-sm font-semibold text-amber-600 border border-amber-600/50 rounded-lg transition-all duration-300 hover:bg-amber-600 hover:text-slate-900 hover:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 focus:ring-offset-slate-800"
     >
       View Project
       <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">

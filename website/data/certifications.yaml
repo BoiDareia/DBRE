@@ -1,0 +1,109 @@
+# Certifications data — ordered by importance/recency
+# Images: /static/images/certs/
+# PDFs: /static/certs/
+
+- title: "AWS Certified Database – Specialty"
+  issuer: "Amazon Web Services"
+  issued: "Apr 2024"
+  expires: "Apr 2027"
+  credentialId: "fbccd423-bae0-4f6a-a361-7f352f1353ba"
+  verifyUrl: "https://www.credly.com/badges/fbccd423-bae0-4f6a-a361-7f352f1353ba/public_url"
+  image: "/images/certs/aws-database-specialty.png"
+  skills: ["AWS", "RDS", "Aurora", "DynamoDB", "Redshift"]
+  status: "active"
+  weight: 1
+
+- title: "Open-source PostgreSQL® Learning Plan – v17"
+  issuer: "EDB"
+  issued: "Aug 2025"
+  image: "/images/certs/edb-postgresql.jpg"
+  skills: ["PostgreSQL"]
+  pdfs:
+    - label: "Essentials PostgreSQL® v16"
+      file: "/certs/edb-essentials-postgresql-v16.pdf"
+    - label: "Advanced PostgreSQL® v16"
+      file: "/certs/edb-advanced-postgresql-v16.pdf"
+    - label: "PostgreSQL® v17"
+      file: "/certs/edb-postgresql-v17.pdf"
+  status: "active"
+  weight: 2
+
+- title: "AWS Discovery Day – Securing AWS Cloud 2023"
+  issuer: "Rumos"
+  issued: "Sep 2023"
+  credentialId: "988e2741-cd03-4de5-8ae8-110edc827262"
+  verifyUrl: "https://www.credly.com/badges/988e2741-cd03-4de5-8ae8-110edc827262/public_url"
+  image: "/images/certs/aws-discovery-day.png"
+  skills: ["AWS", "Cloud", "Security"]
+  status: "active"
+  weight: 3
+
+- title: "Microsoft Certified: Azure Database Administrator Associate"
+  issuer: "Microsoft"
+  issued: "Jan 2021"
+  expires: "Jan 2024"
+  credentialId: "174213cb-1b68-443c-a556-a5015e454111"
+  certNumber: "06F3FD-D082C2"
+  verifyUrl: "https://www.credly.com/badges/174213cb-1b68-443c-a556-a5015e454111/public_url"
+  image: "/images/certs/azure-db-admin.png"
+  skills: ["SQL Azure", "T-SQL"]
+  status: "expired"
+  weight: 4
+
+- title: "GitHub Fundamentals – Administration Basics"
+  issuer: "Microsoft"
+  issued: "Mar 2024"
+  image: "/images/certs/github-fundamentals.png"
+  skills: ["GitHub"]
+  status: "active"
+  weight: 5
+
+- title: "SQL Server: AlwaysOn Availability Groups and Failover Cluster Instances"
+  issuer: "Microsoft"
+  issued: "May 2019"
+  image: "/images/certs/microsoft-sql-alwayson.png"
+  skills: ["T-SQL", "High Availability"]
+  pdfs:
+    - label: "AlwaysOn Certificate"
+      file: "/certs/sql-server-alwayson.pdf"
+  status: "active"
+  weight: 6
+
+- title: "Exam 461: Querying Microsoft SQL Server 2012/2014"
+  issuer: "Microsoft"
+  issued: "Jun 2016"
+  credentialId: "F402-7435"
+  certNumber: "785430-DN0ED8"
+  verifyUrl: "https://www.credly.com/badges/1df799c3-8be4-44ef-93fa-c8bce9e87963/public_url"
+  image: "/images/certs/microsoft-exam-461.png"
+  skills: ["T-SQL"]
+  status: "active"
+  weight: 7
+
+- title: "Exam 462: Administering Microsoft SQL Server 2012/2014 Databases"
+  issuer: "Microsoft"
+  issued: "Sep 2015"
+  credentialId: "F402-7435"
+  certNumber: "785430-DN0ED8"
+  verifyUrl: "https://www.credly.com/badges/e6bed4c5-7627-4824-8df4-a4f3633bbf2a/public_url"
+  image: "/images/certs/microsoft-exam-462.png"
+  skills: ["Database Administration", "T-SQL"]
+  status: "active"
+  weight: 8
+
+- title: "MCPS: Microsoft Certified Professional"
+  issuer: "Microsoft"
+  issued: "Sep 2015"
+  credentialId: "F402-7435"
+  certNumber: "785430-DN0ED8"
+  image: "/images/certs/microsoft-certified-professional.svg"
+  status: "active"
+  weight: 9
+
+- title: "ITIL® Foundation Certificate in IT Service Management"
+  issuer: "EXIN"
+  issued: "Jan 2015"
+  credentialId: "5270049.20362584"
+  image: "/images/certs/itil-foundation.png"
+  status: "active"
+  weight: 10
