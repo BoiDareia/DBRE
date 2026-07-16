@@ -342,3 +342,33 @@
   lat: 43.7696
   lng: 11.2558
   image: "/images/travel/florence.jpg"
+
+- place: "Tokyo"
+  country: "Japan"
+  lat: 35.6762
+  lng: 139.6503
+  image: "/images/travel/tokyo.jpg"
+
+- place: "Kyoto"
+  country: "Japan"
+  lat: 35.0116
+  lng: 135.7681
+  image: "/images/travel/kyoto.jpg"
+
+- place: "Osaka"
+  country: "Japan"
+  lat: 34.6937
+  lng: 135.5023
+  image: "/images/travel/osaka.jpg"
+
+- place: "Kanazawa"
+  country: "Japan"
+  lat: 36.5613
+  lng: 136.6562
+  image: "/images/travel/kanazawa.jpg"
+
+- place: "Okinawa"
+  country: "Japan"
+  lat: 26.3344
+  lng: 127.8056
+  image: "/images/travel/okinawa.jpg"
