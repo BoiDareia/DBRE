@@ -114,11 +114,6 @@
 
   let rateLimitTimeout = null;
 
-  // Restore passcode from localStorage on page load
-  const storedPasscode = localStorage.getItem('travelAgentPasscode');
-  if (storedPasscode) {
-    passcodeInput.value = storedPasscode;
-  }
 
   function showError(el, msg) {
     el.textContent = msg;
@@ -168,6 +163,11 @@
       html += renderDetailSection('activities-' + idx, 'Activities', renderActivities(dest.activities));
 
       card.innerHTML = html;
+      card.querySelectorAll('[data-section-toggle]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          toggleSection(button.id.replace('btn-', ''));
+        });
+      });
       destinationCards.appendChild(card);
     });
     results.classList.remove('hidden');
@@ -189,7 +189,6 @@
     panel.classList.toggle('hidden');
     chevron.classList.toggle('rotate-180');
   }
-  window.toggleSection = toggleSection;
 
   function renderDetailSection(id, label, content) {
     return '<div class="mt-3 border-t border-slate-700/50 pt-3">' +
@@ -198,7 +197,7 @@
             'aria-expanded="false" ' +
             'aria-controls="panel-' + id + '" ' +
             'class="w-full min-h-[44px] flex items-center justify-between text-left text-sm font-semibold text-amber-600 rounded focus:ring-2 focus:ring-amber-400 focus:outline-none px-2 py-2"' +
-            ' onclick="toggleSection(\'' + id + '\')">' +
+            ' data-section-toggle>' +
             '<span>' + label + '</span>' +
             '<svg class="w-4 h-4 transition-transform duration-200" id="chevron-' + id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
                 '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>' +
@@ -270,12 +269,13 @@
 
     if (!validate()) return;
 
-    // Save passcode to localStorage
-    localStorage.setItem('travelAgentPasscode', passcodeInput.value);
 
     hideGlobalError();
     results.classList.add('hidden');
     setLoading(true);
+
+    const controller = new AbortController();
+    const requestTimeout = setTimeout(function () { controller.abort(); }, 15000);
 
     try {
       const response = await fetch(API_URL, {
@@ -284,6 +284,7 @@
           'Content-Type': 'application/json',
           'X-Travel-Passcode': passcodeInput.value
         },
+        signal: controller.signal,
         body: JSON.stringify({
           budget: Number(budgetInput.value),
           tastes: tastesInput.value
@@ -292,10 +293,13 @@
 
       if (response.ok) {
         const data = await response.json();
+        if (!data || !Array.isArray(data.destinations)) {
+          throw new Error('Invalid recommendation response');
+        }
         renderCards(data.destinations);
       } else if (response.status === 401) {
         showGlobalError('Invalid passcode. Please check your access code.');
-        localStorage.removeItem('travelAgentPasscode');
+        passcodeInput.value = '';
       } else if (response.status === 429) {
         showGlobalError('Too many requests. Please wait a few minutes before trying again.');
         submitBtn.disabled = true;
@@ -306,9 +310,10 @@
       } else {
         showGlobalError('Something went wrong. Please try again later.');
       }
-    } catch (_) {
-      showGlobalError('Something went wrong. Please try again later.');
+    } catch (error) {
+      showGlobalError(error.name === 'AbortError' ? 'The request timed out. Please try again.' : 'Something went wrong. Please try again later.');
     } finally {
+      clearTimeout(requestTimeout);
       setLoading(false);
     }
   });

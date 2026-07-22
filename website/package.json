@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "vitest run"
+    "build": "hugo --minify",
+    "test": "npm run build && npm run test:generated",
+    "test:generated": "vitest run"
   },
   "devDependencies": {
     "vitest": "^3.2.1",
