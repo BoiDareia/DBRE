@@ -1,0 +1,238 @@
+{{ define "main" }}
+<section class="max-w-5xl mx-auto px-4 py-12">
+  {{/* Page heading */}}
+  <div class="mb-10">
+    <h1 class="text-3xl md:text-4xl font-heading font-bold text-white mb-3">{{ .Title }}</h1>
+    <p class="text-slate-400 text-lg">Enter your budget and travel preferences to get AI-powered destination recommendations.</p>
+  </div>
+
+  {{/* Form */}}
+  <form
+    id="travel-form"
+    data-api-url="{{ .Site.Params.travelAgentAPI }}"
+    class="space-y-6 max-w-xl"
+    novalidate
+  >
+    {{/* Budget field */}}
+    <div>
+      <label for="budget" class="block text-sm font-semibold text-slate-300 mb-2">Budget (EUR)</label>
+      <input
+        type="number"
+        id="budget"
+        name="budget"
+        min="1"
+        max="999999"
+        required
+        placeholder="e.g. 2000"
+        class="w-full min-h-11 px-4 py-3 bg-slate-800 text-white border border-slate-700 rounded-lg placeholder-slate-500 focus:ring-2 focus:ring-amber-400 focus:border-amber-400 focus:outline-none transition"
+        aria-describedby="budget-error"
+      />
+      <p id="budget-error" class="mt-1 text-sm text-red-400 hidden" role="alert"></p>
+    </div>
+
+    {{/* Tastes field */}}
+    <div>
+      <label for="tastes" class="block text-sm font-semibold text-slate-300 mb-2">Travel Tastes</label>
+      <textarea
+        id="tastes"
+        name="tastes"
+        minlength="1"
+        maxlength="500"
+        required
+        rows="3"
+        placeholder="e.g. beach, history, good food, nightlife"
+        class="w-full min-h-11 px-4 py-3 bg-slate-800 text-white border border-slate-700 rounded-lg placeholder-slate-500 resize-y focus:ring-2 focus:ring-amber-400 focus:border-amber-400 focus:outline-none transition"
+        aria-describedby="tastes-error"
+      ></textarea>
+      <p id="tastes-error" class="mt-1 text-sm text-red-400 hidden" role="alert"></p>
+    </div>
+
+    {{/* Passcode field */}}
+    <div>
+      <label for="passcode" class="block text-sm font-semibold text-slate-300 mb-2">Passcode</label>
+      <input
+        type="password"
+        id="passcode"
+        name="passcode"
+        placeholder="Access code"
+        class="w-full min-h-11 px-4 py-3 bg-slate-800 text-white border border-slate-700 rounded-lg placeholder-slate-500 focus:ring-2 focus:ring-amber-400 focus:border-amber-400 focus:outline-none transition"
+        aria-describedby="passcode-hint"
+      />
+      <p id="passcode-hint" class="mt-1 text-sm text-slate-500">Stored locally for convenience.</p>
+    </div>
+
+    {{/* Submit button */}}
+    <div>
+      <button
+        type="submit"
+        id="submit-btn"
+        class="min-h-11 min-w-11 px-6 py-3 bg-amber-600 text-slate-900 font-semibold rounded-lg hover:bg-amber-500 transition focus:ring-2 focus:ring-amber-400 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Get Recommendations
+      </button>
+    </div>
+  </form>
+
+  {{/* Loading indicator */}}
+  <div id="loading-indicator" class="hidden mt-8 flex items-center gap-3 text-slate-400">
+    <svg class="animate-spin h-5 w-5 text-amber-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+    <span>Finding destinations&hellip;</span>
+  </div>
+
+  {{/* Error message */}}
+  <div id="error-message" class="hidden mt-8 p-4 bg-red-900/30 border border-red-700/50 rounded-lg" role="alert">
+    <p class="text-red-400 font-medium"></p>
+  </div>
+
+  {{/* Results area */}}
+  <div id="results" class="hidden mt-10">
+    <h2 class="text-2xl font-heading font-bold text-white mb-6">Recommended Destinations</h2>
+    <div id="destination-cards" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {{/* Cards rendered by JS */}}
+    </div>
+  </div>
+</section>
+
+<script>
+(function () {
+  const form = document.getElementById('travel-form');
+  const budgetInput = document.getElementById('budget');
+  const tastesInput = document.getElementById('tastes');
+  const passcodeInput = document.getElementById('passcode');
+  const submitBtn = document.getElementById('submit-btn');
+  const loadingIndicator = document.getElementById('loading-indicator');
+  const errorMessage = document.getElementById('error-message');
+  const errorText = errorMessage.querySelector('p');
+  const results = document.getElementById('results');
+  const destinationCards = document.getElementById('destination-cards');
+  const budgetError = document.getElementById('budget-error');
+  const tastesError = document.getElementById('tastes-error');
+  const API_URL = form.getAttribute('data-api-url');
+
+  let rateLimitTimeout = null;
+
+  // Restore passcode from localStorage on page load
+  const storedPasscode = localStorage.getItem('travelAgentPasscode');
+  if (storedPasscode) {
+    passcodeInput.value = storedPasscode;
+  }
+
+  function showError(el, msg) {
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+
+  function hideError(el) {
+    el.textContent = '';
+    el.classList.add('hidden');
+  }
+
+  function showGlobalError(msg) {
+    errorText.textContent = msg;
+    errorMessage.classList.remove('hidden');
+  }
+
+  function hideGlobalError() {
+    errorText.textContent = '';
+    errorMessage.classList.add('hidden');
+  }
+
+  function setLoading(loading) {
+    if (loading) {
+      loadingIndicator.classList.remove('hidden');
+      submitBtn.disabled = true;
+    } else {
+      loadingIndicator.classList.add('hidden');
+      if (!rateLimitTimeout) {
+        submitBtn.disabled = false;
+      }
+    }
+  }
+
+  function renderCards(destinations) {
+    destinationCards.innerHTML = '';
+    destinations.forEach(function (dest) {
+      const card = document.createElement('div');
+      card.className = 'p-6 bg-slate-800/50 border border-slate-700/50 rounded-lg hover:border-amber-600 transition';
+      card.innerHTML =
+        '<h3 class="text-lg font-heading font-bold text-white mb-1">' + (dest.name || '-') + '</h3>' +
+        '<p class="text-amber-600 text-sm font-semibold mb-3">' + (dest.country || '-') + '</p>' +
+        '<p class="text-slate-300 text-sm leading-relaxed">' + (dest.reason || '-') + '</p>';
+      destinationCards.appendChild(card);
+    });
+    results.classList.remove('hidden');
+  }
+
+  function validate() {
+    let valid = true;
+    hideError(budgetError);
+    hideError(tastesError);
+
+    const budgetVal = Number(budgetInput.value);
+    if (!budgetInput.value || isNaN(budgetVal) || budgetVal < 1 || budgetVal > 999999 || !Number.isFinite(budgetVal)) {
+      showError(budgetError, 'Budget must be a number between 1 and 999,999.');
+      valid = false;
+    }
+
+    const tastesVal = tastesInput.value;
+    if (!tastesVal || tastesVal.length < 1 || tastesVal.length > 500) {
+      showError(tastesError, 'Travel tastes must be between 1 and 500 characters.');
+      valid = false;
+    }
+
+    return valid;
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+
+    if (!validate()) return;
+
+    // Save passcode to localStorage
+    localStorage.setItem('travelAgentPasscode', passcodeInput.value);
+
+    hideGlobalError();
+    results.classList.add('hidden');
+    setLoading(true);
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Travel-Passcode': passcodeInput.value
+        },
+        body: JSON.stringify({
+          budget: Number(budgetInput.value),
+          tastes: tastesInput.value
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        renderCards(data.destinations);
+      } else if (response.status === 401) {
+        showGlobalError('Invalid passcode. Please check your access code.');
+        localStorage.removeItem('travelAgentPasscode');
+      } else if (response.status === 429) {
+        showGlobalError('Too many requests. Please wait a few minutes before trying again.');
+        submitBtn.disabled = true;
+        rateLimitTimeout = setTimeout(function () {
+          rateLimitTimeout = null;
+          submitBtn.disabled = false;
+        }, 60000);
+      } else {
+        showGlobalError('Something went wrong. Please try again later.');
+      }
+    } catch (_) {
+      showGlobalError('Something went wrong. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  });
+})();
+</script>
+{{ end }}
