@@ -94,14 +94,20 @@
   var destinations = JSON.parse({{ hugo.Data.travels | jsonify }});
 
   var bounds = [];
+  function escapeHtml(value) {
+    var element = document.createElement('div');
+    element.textContent = String(value || '');
+    return element.innerHTML;
+  }
+
 
   destinations.forEach(function(d) {
     var popupHtml = '<div style="text-align:center;min-width:140px;padding:4px;">';
     if (d.image) {
-      popupHtml += '<img src="' + d.image + '" alt="' + d.place + '" style="width:140px;height:95px;object-fit:cover;border-radius:6px;margin-bottom:8px;display:block;" onerror="this.style.display=\'none\'" />';
+      popupHtml += '<img src="' + escapeHtml(d.image) + '" alt="' + escapeHtml(d.place) + '" style="width:140px;height:95px;object-fit:cover;border-radius:6px;margin-bottom:8px;display:block;" />';
     }
-    popupHtml += '<strong style="color:#1e293b;font-size:13px;">' + d.place + '</strong><br/>';
-    popupHtml += '<span style="color:#92400e;font-size:11px;">' + d.country + '</span></div>';
+    popupHtml += '<strong style="color:#1e293b;font-size:13px;">' + escapeHtml(d.place) + '</strong><br/>';
+    popupHtml += '<span style="color:#92400e;font-size:11px;">' + escapeHtml(d.country) + '</span></div>';
 
     L.marker([d.lat, d.lng], { icon: amberIcon })
       .addTo(map)
