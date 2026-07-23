@@ -114,6 +114,11 @@
 
   let rateLimitTimeout = null;
 
+  // Restore passcode from localStorage on page load
+  const storedPasscode = localStorage.getItem('travelAgentPasscode');
+  if (storedPasscode) {
+    passcodeInput.value = storedPasscode;
+  }
 
   function showError(el, msg) {
     el.textContent = msg;
@@ -264,56 +269,74 @@
     return valid;
   }
 
+  async function fetchRecommendations() {
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Travel-Passcode': passcodeInput.value
+      },
+      body: JSON.stringify({
+        budget: Number(budgetInput.value),
+        tastes: tastesInput.value
+      })
+    });
+    return response;
+  }
+
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
 
     if (!validate()) return;
 
+    // Save passcode to localStorage
+    localStorage.setItem('travelAgentPasscode', passcodeInput.value);
 
     hideGlobalError();
     results.classList.add('hidden');
     setLoading(true);
 
-    const controller = new AbortController();
-    const requestTimeout = setTimeout(function () { controller.abort(); }, 15000);
-
     try {
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Travel-Passcode': passcodeInput.value
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          budget: Number(budgetInput.value),
-          tastes: tastesInput.value
-        })
-      });
+      let lastError = null;
 
-      if (response.ok) {
-        const data = await response.json();
-        if (!data || !Array.isArray(data.destinations)) {
-          throw new Error('Invalid recommendation response');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt === 1) {
+          loadingIndicator.querySelector('span').textContent = 'Retrying\u2026';
         }
-        renderCards(data.destinations);
-      } else if (response.status === 401) {
-        showGlobalError('Invalid passcode. Please check your access code.');
-        passcodeInput.value = '';
-      } else if (response.status === 429) {
-        showGlobalError('Too many requests. Please wait a few minutes before trying again.');
-        submitBtn.disabled = true;
-        rateLimitTimeout = setTimeout(function () {
-          rateLimitTimeout = null;
-          submitBtn.disabled = false;
-        }, 60000);
-      } else {
-        showGlobalError('Something went wrong. Please try again later.');
+
+        try {
+          const response = await fetchRecommendations();
+
+          if (response.ok) {
+            const data = await response.json();
+            if (!data || !Array.isArray(data.destinations)) {
+              throw new Error('Invalid response');
+            }
+            renderCards(data.destinations);
+            return;
+          } else if (response.status === 401) {
+            showGlobalError('Invalid passcode. Please check your access code.');
+            localStorage.removeItem('travelAgentPasscode');
+            return;
+          } else if (response.status === 429) {
+            showGlobalError('Too many requests. Please wait a few minutes before trying again.');
+            submitBtn.disabled = true;
+            rateLimitTimeout = setTimeout(function () {
+              rateLimitTimeout = null;
+              submitBtn.disabled = false;
+            }, 60000);
+            return;
+          } else {
+            lastError = new Error('Status ' + response.status);
+          }
+        } catch (error) {
+          lastError = error;
+        }
       }
-    } catch (error) {
-      showGlobalError(error.name === 'AbortError' ? 'The request timed out. Please try again.' : 'Something went wrong. Please try again later.');
+
+      showGlobalError('The request timed out. Please try again.');
     } finally {
-      clearTimeout(requestTimeout);
+      loadingIndicator.querySelector('span').textContent = 'Finding destinations\u2026';
       setLoading(false);
     }
   });
